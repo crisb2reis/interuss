@@ -1,0 +1,157 @@
+{
+  "info": {
+    "name": "USS — Sandbox BR-UTM",
+    "description": "Coleção Postman para testar o USS local conectado ao DSS e AUTH do sandbox BR-UTM (ASTM F3548-22).\n\nServidor local: http://127.0.0.1:7000\n\nFluxo básico:\n1. GET /api/auth/token/ — Obter JWT\n2. GET /api/oir/ — Listar OIRs\n3. POST /api/oir/ — Criar OIR no DSS\n4. GET /api/oir/{id}/ — Consultar OIR\n5. POST /api/oir/ (mesma área) — Simular conflito\n6. DELETE /api/oir/{id}/ — Remover OIR\n7. POST /api/oir/query_dss/ — Consultar Constraints\n8. POST /api/oir/search_dss/ — Buscar OIRs no DSS",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key": "base_url", "value": "http://127.0.0.1:7000", "type": "string"},
+    {"key": "oir_id", "value": "", "type": "string"},
+    {"key": "token", "value": "", "type": "string"}
+  ],
+  "item": [
+    {
+      "name": "1. Health Check",
+      "request": {
+        "method": "GET",
+        "url": {"raw": "{{base_url}}/", "host": ["{{base_url}}"], "path": [""]},
+        "description": "Verifica se o USS está rodando e lista todos os endpoints disponíveis."
+      }
+    },
+    {
+      "name": "2. Obter Token JWT",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var json = pm.response.json();",
+              "if (json.access_token) {",
+              "    pm.collectionVariables.set('token', json.access_token);",
+              "    console.log('Token salvo na variável {{token}}');",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{base_url}}/api/auth/token/?audience=core-service&scope=utm.strategic_coordination",
+          "host": ["{{base_url}}"],
+          "path": ["api", "auth", "token", ""],
+          "query": [
+            {"key": "audience", "value": "core-service"},
+            {"key": "scope", "value": "utm.strategic_coordination"}
+          ]
+        },
+        "description": "Obtém um JWT válido do AUTH do sandbox BR-UTM.\nO token é salvo automaticamente na variável {{token}} pelo script de teste."
+      }
+    },
+    {
+      "name": "3. Listar OIRs Locais",
+      "request": {
+        "method": "GET",
+        "url": {"raw": "{{base_url}}/api/oir/", "host": ["{{base_url}}"], "path": ["api", "oir", ""]},
+        "description": "Lista todas as OIRs cadastradas localmente no banco do USS."
+      }
+    },
+    {
+      "name": "4. Criar OIR no DSS (USS Cristiano)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var json = pm.response.json();",
+              "if (json.id) {",
+              "    pm.collectionVariables.set('oir_id', json.id);",
+              "    console.log('OIR ID salvo:', json.id);",
+              "    console.log('Conflitos:', json.conflicting_oirs.length);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "url": {"raw": "{{base_url}}/api/oir/", "host": ["{{base_url}}"], "path": ["api", "oir", ""]},
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"extents\": [\n    {\n      \"volume\": {\n        \"outline_polygon\": {\n          \"vertices\": [\n            {\"lat\": -23.5505, \"lng\": -46.6333},\n            {\"lat\": -23.5505, \"lng\": -46.6233},\n            {\"lat\": -23.5405, \"lng\": -46.6233},\n            {\"lat\": -23.5405, \"lng\": -46.6333}\n          ]\n        },\n        \"altitude_lower\": {\"value\": 50, \"units\": \"M\", \"reference\": \"W84\"},\n        \"altitude_upper\": {\"value\": 100, \"units\": \"M\", \"reference\": \"W84\"}\n      },\n      \"time_start\": {\"value\": \"2026-08-15T14:00:00Z\", \"format\": \"RFC3339\"},\n      \"time_end\": {\"value\": \"2026-08-15T16:00:00Z\", \"format\": \"RFC3339\"}\n    }\n  ],\n  \"uss_base_url\": \"https://uss-cristiano.ngrok.io\",\n  \"state\": \"Accepted\"\n}",
+          "options": {"raw": {"language": "json"}}
+        },
+        "description": "Cria uma OIR no DSS do sandbox.\nO ID retornado é salvo automaticamente em {{oir_id}}.\nSe não houver conflito, 'conflicting_oirs' fica vazio."
+      }
+    },
+    {
+      "name": "5. Consultar OIR por ID",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{base_url}}/api/oir/{{oir_id}}/",
+          "host": ["{{base_url}}"],
+          "path": ["api", "oir", "{{oir_id}}", ""]
+        },
+        "description": "Consulta os detalhes de uma OIR pelo ID (salvo após o Request 4)."
+      }
+    },
+    {
+      "name": "6. Simular Conflito (USS Emanoel — mesma área)",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "url": {"raw": "{{base_url}}/api/oir/", "host": ["{{base_url}}"], "path": ["api", "oir", ""]},
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"extents\": [\n    {\n      \"volume\": {\n        \"outline_polygon\": {\n          \"vertices\": [\n            {\"lat\": -23.5505, \"lng\": -46.6333},\n            {\"lat\": -23.5505, \"lng\": -46.6233},\n            {\"lat\": -23.5405, \"lng\": -46.6233},\n            {\"lat\": -23.5405, \"lng\": -46.6333}\n          ]\n        },\n        \"altitude_lower\": {\"value\": 50, \"units\": \"M\", \"reference\": \"W84\"},\n        \"altitude_upper\": {\"value\": 100, \"units\": \"M\", \"reference\": \"W84\"}\n      },\n      \"time_start\": {\"value\": \"2026-08-15T14:00:00Z\", \"format\": \"RFC3339\"},\n      \"time_end\": {\"value\": \"2026-08-15T16:00:00Z\", \"format\": \"RFC3339\"}\n    }\n  ],\n  \"uss_base_url\": \"https://uss-emanoel.ngrok.io\",\n  \"state\": \"Accepted\"\n}",
+          "options": {"raw": {"language": "json"}}
+        },
+        "description": "Envia OIR com a MESMA área e horário do Request 4, mas com uss_base_url diferente (USS Emanoel).\nEsperado: HTTP 409 Conflict com a lista de 'conflicting_oirs' mostrando a OIR de Cristiano."
+      }
+    },
+    {
+      "name": "7. Remover OIR do DSS",
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{base_url}}/api/oir/{{oir_id}}/",
+          "host": ["{{base_url}}"],
+          "path": ["api", "oir", "{{oir_id}}", ""]
+        },
+        "description": "Remove a OIR tanto localmente quanto no DSS."
+      }
+    },
+    {
+      "name": "8. Consultar Constraints no DSS",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "url": {"raw": "{{base_url}}/api/oir/query_dss/", "host": ["{{base_url}}"], "path": ["api", "oir", "query_dss", ""]},
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"area_of_interest\": {\n    \"volume\": {\n      \"outline_polygon\": {\n        \"vertices\": [\n          {\"lat\": -23.5505, \"lng\": -46.6333},\n          {\"lat\": -23.5505, \"lng\": -46.6233},\n          {\"lat\": -23.5405, \"lng\": -46.6233},\n          {\"lat\": -23.5405, \"lng\": -46.6333}\n        ]\n      },\n      \"altitude_lower\": {\"value\": 50, \"units\": \"M\", \"reference\": \"W84\"},\n      \"altitude_upper\": {\"value\": 100, \"units\": \"M\", \"reference\": \"W84\"}\n    },\n    \"time_start\": {\"value\": \"2026-08-15T14:00:00Z\", \"format\": \"RFC3339\"},\n    \"time_end\": {\"value\": \"2026-08-15T16:00:00Z\", \"format\": \"RFC3339\"}\n  }\n}",
+          "options": {"raw": {"language": "json"}}
+        },
+        "description": "Consulta constraints no DSS para a área especificada."
+      }
+    },
+    {
+      "name": "9. Buscar OIRs no DSS por Área",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "url": {"raw": "{{base_url}}/api/oir/search_dss/", "host": ["{{base_url}}"], "path": ["api", "oir", "search_dss", ""]},
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"area_of_interest\": {\n    \"volume\": {\n      \"outline_polygon\": {\n        \"vertices\": [\n          {\"lat\": -23.5505, \"lng\": -46.6333},\n          {\"lat\": -23.5505, \"lng\": -46.6233},\n          {\"lat\": -23.5405, \"lng\": -46.6233},\n          {\"lat\": -23.5405, \"lng\": -46.6333}\n        ]\n      },\n      \"altitude_lower\": {\"value\": 50, \"units\": \"M\", \"reference\": \"W84\"},\n      \"altitude_upper\": {\"value\": 100, \"units\": \"M\", \"reference\": \"W84\"}\n    },\n    \"time_start\": {\"value\": \"2026-08-15T14:00:00Z\", \"format\": \"RFC3339\"},\n    \"time_end\": {\"value\": \"2026-08-15T16:00:00Z\", \"format\": \"RFC3339\"}\n  }\n}",
+          "options": {"raw": {"language": "json"}}
+        },
+        "description": "Busca OIRs de outros USSs registradas no DSS para a área especificada."
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    image: uss-web:latest
+    container_name: uss-web-app
+    ports:
+      - "8001:8000"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      # Sobrescreve as URLs para apontar para os aliases internos do Docker
+      - DATABASE_URL=postgis://uss_user:uss_password@db:5432/uss_db
+      - REDIS_URL=redis://redis:6379/0
+    networks:
+      - uss_default
+    command: >
+      sh -c "python3 manage.py migrate &&
+             python3 manage.py runserver 0.0.0.0:8000"
+
+networks:
+  uss_default:
+    external: true

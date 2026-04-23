@@ -1,0 +1,9 @@
+django>=5.0
+djangorestframework
+requests
+pyjwt
+python-dotenv
+django-environ
+psycopg2-binary>=2.9
+django-redis>=5.4
+urllib3
