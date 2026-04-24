@@ -30,7 +30,6 @@ INSTALLED_APPS = [
     # Local apps
     'apps.dss_client',
     'apps.oir',
-    'apps.test_interface',
     'apps.flight_plans',
 ]
 
@@ -43,6 +42,8 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+APPEND_SLASH = False
 
 ROOT_URLCONF = 'config.urls'
 

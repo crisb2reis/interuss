@@ -1,7 +1,10 @@
 from enum import Enum
 from pydantic import BaseModel, Field, UUID4, field_validator
 from typing import List, Optional, Literal
-from ..common.schemas import Volume4DSchema, validate_url_https_no_slash
+from ..common.schemas import (
+    Volume4DSchema, validate_url_https_no_slash, TimeSchema, AltitudeSchema, 
+    PositionAccuracyHorizontalEnum, PositionAccuracyVerticalEnum
+)
 
 class FlightTypeEnum(str, Enum):
     VLOS = "VLOS"
@@ -55,3 +58,57 @@ class SubscriptionAdvancedSchema(BaseModel):
     @classmethod
     def check_url(cls, v):
         return validate_url_https_no_slash(v)
+
+# Importing later to avoid circular dependency since DSS schemas import from here
+from ..dss.schemas import OperationalIntentReferenceSchema, ConstraintReferenceSchema, SubscriptionState, GeozoneSchema
+
+class OperationalIntentDetails(BaseModel):
+    volumes: List[Volume4DSchema] = []
+    off_nominal_volumes: List[Volume4DSchema] = []
+    priority: int = 0
+
+class OperationalIntent(BaseModel):
+    reference: OperationalIntentReferenceSchema
+    details: OperationalIntentDetails
+
+class PutOperationalIntentDetailsParameters(BaseModel):
+    operational_intent_id: str
+    operational_intent: Optional[OperationalIntent] = None
+    subscriptions: List[SubscriptionState] = Field(..., min_length=1)
+
+class ConstraintDetails(BaseModel):
+    volumes: List[Volume4DSchema] = Field(..., min_length=1)
+    type: str
+    geozone: Optional[GeozoneSchema] = None
+
+class Constraint(BaseModel):
+    reference: ConstraintReferenceSchema
+    details: ConstraintDetails
+
+class PutConstraintDetailsParameters(BaseModel):
+    constraint_id: str
+    constraint: Optional[Constraint] = None
+    subscriptions: List[SubscriptionState] = Field(..., min_length=1)
+
+class Velocity(BaseModel):
+    speed: float
+    units_speed: Literal["MetersPerSecond"] = "MetersPerSecond"
+    track: float = 0.0
+
+class Position(BaseModel):
+    longitude: float = Field(..., ge=-180, le=180)
+    latitude: float = Field(..., ge=-90, le=90)
+    accuracy_h: PositionAccuracyHorizontalEnum
+    accuracy_v: PositionAccuracyVerticalEnum
+    extrapolated: bool = False
+    altitude: Optional[AltitudeSchema] = None
+
+class VehicleTelemetry(BaseModel):
+    time_measured: TimeSchema
+    position: Position
+    velocity: Velocity
+
+class GetOperationalIntentTelemetryResponse(BaseModel):
+    operational_intent_id: str
+    telemetry: Optional[VehicleTelemetry] = None
+    next_telemetry_opportunity: Optional[TimeSchema] = None

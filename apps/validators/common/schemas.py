@@ -2,6 +2,7 @@ from pydantic import BaseModel, field_validator, model_validator, Field
 from typing import Literal, Optional, List
 from datetime import datetime
 from urllib.parse import urlparse
+from enum import Enum
 
 def validate_url_https_no_slash(v: str) -> str:
     result = urlparse(v)
@@ -10,6 +11,33 @@ def validate_url_https_no_slash(v: str) -> str:
     if v.endswith("/"):
         raise ValueError("URL must not end with a trailing slash.")
     return v
+
+class PositionAccuracyVerticalEnum(str, Enum):
+    VAUnknown = "VAUnknown"
+    VA150mPlus = "VA150mPlus"
+    VA150m = "VA150m"
+    VA45m = "VA45m"
+    VA25m = "VA25m"
+    VA10m = "VA10m"
+    VA3m = "VA3m"
+    VA1m = "VA1m"
+
+class PositionAccuracyHorizontalEnum(str, Enum):
+    HAUnknown = "HAUnknown"
+    HA10NMPlus = "HA10NMPlus"
+    HA10NM = "HA10NM"
+    HA4NM = "HA4NM"
+    HA2NM = "HA2NM"
+    HA1NM = "HA1NM"
+    HA05NM = "HA05NM"
+    HA03NM = "HA03NM"
+    HA01NM = "HA01NM"
+    HA005NM = "HA005NM"
+    HA30m = "HA30m"
+    HA10m = "HA10m"
+    HA3m = "HA3m"
+    HA1m = "HA1m"
+
 
 class AltitudeSchema(BaseModel):
     value: float
