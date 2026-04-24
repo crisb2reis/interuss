@@ -7,3 +7,4 @@ django-environ
 psycopg2-binary>=2.9
 django-redis>=5.4
 urllib3
+pydantic>=2.0

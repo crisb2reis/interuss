@@ -7,6 +7,9 @@ Valida payloads no padrão ASTM F3548-22.
 from rest_framework import serializers
 
 from .models import OperationalIntent
+from apps.validators import validate_oir_payload, validate_area_of_interest
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework.exceptions import ValidationError
 
 
 class ExtentVolumePolygonSerializer(serializers.Serializer):
@@ -55,6 +58,13 @@ class OIRCreateSerializer(serializers.Serializer):
         help_text="Parâmetros para criar nova subscrição no DSS.",
     )
 
+    def validate(self, data):
+        try:
+            validate_oir_payload(data)
+        except DjangoValidationError as e:
+            raise ValidationError(detail=e.message if hasattr(e, 'message') else str(e))
+        return data
+
 
 class OperationalIntentSerializer(serializers.ModelSerializer):
     """Serializer de leitura do model OperationalIntent."""
@@ -81,3 +91,11 @@ class QueryDSSSerializer(serializers.Serializer):
     area_of_interest = ExtentSerializer(
         help_text="Área de interesse para filtrar constraints no DSS.",
     )
+
+    def validate(self, data):
+        try:
+            if 'area_of_interest' in data:
+                validate_area_of_interest(data['area_of_interest'])
+        except DjangoValidationError as e:
+            raise ValidationError(detail=e.message if hasattr(e, 'message') else str(e))
+        return data

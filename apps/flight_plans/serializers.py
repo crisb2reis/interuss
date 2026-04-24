@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from .models import FlightPlan, OperationalIntent, State
 from django.contrib.gis.geos import Polygon, MultiPolygon, Point
+from apps.validators import validate_basic_information, validate_execution_style
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 class FlightPlanSerializer(serializers.ModelSerializer):
     class Meta:
@@ -30,6 +32,13 @@ class ASTMBasicInformationSerializer(serializers.Serializer):
     utm_id = serializers.UUIDField(required=False, allow_null=True)
     specific_session_id = serializers.CharField(required=False, allow_blank=True, default="")
 
+    def validate(self, data):
+        try:
+            validate_basic_information(data)
+        except DjangoValidationError as e:
+            raise serializers.ValidationError(detail=e.message if hasattr(e, 'message') else str(e))
+        return data
+
 class ASTMFlightPlanBodySerializer(serializers.Serializer):
     basic_information = ASTMBasicInformationSerializer()
     uas = serializers.CharField(required=False, allow_blank=True, default="")
@@ -43,10 +52,18 @@ class ASTMFlightPlanBodySerializer(serializers.Serializer):
 class ASTMFlightPlanRequestSerializer(serializers.Serializer):
     flight_plan = ASTMFlightPlanBodySerializer()
     execution_style = serializers.ChoiceField(
-        choices=["IfAllowed", "DespiteConflict"],
+        choices=["IfAllowed", "DespiteConflict", "Hypothetical", "InReality"],
         default="IfAllowed"
     )
     request_id = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate(self, data):
+        try:
+            if 'execution_style' in data:
+                validate_execution_style(data['execution_style'])
+        except DjangoValidationError as e:
+            raise serializers.ValidationError(detail=e.message if hasattr(e, 'message') else str(e))
+        return data
 
 class ASTMFlightPlanResponseSerializer(serializers.Serializer):
     planning_result = serializers.CharField()

@@ -1,0 +1,169 @@
+from pydantic import ValidationError as PydanticError, UUID4
+from django.core.exceptions import ValidationError
+
+# Schemas
+from .common.schemas import (
+    AltitudeSchema, TimeSchema, Volume4DSchema, LatLngPointSchema, 
+    RadiusSchema, PolygonSchema, validate_url_https_no_slash
+)
+from .uss.schemas import (
+    FlightTypeEnum, ExecutionStyleEnum, USSAvailabilityEnum,
+    EntityOVNSchema, BasicInformationSchema, SubscriptionAdvancedSchema
+)
+from .dss.schemas import (
+    OIRPayloadSchema, GeozoneSchema, AuthoritySchema, SubscriptionSchema
+)
+
+def _wrap_pydantic(schema_cls, data):
+    try:
+        if isinstance(data, list):
+            return [schema_cls(**item).model_dump() for item in data]
+        model = schema_cls(**data)
+        return model.model_dump()
+    except PydanticError as e:
+        raise ValidationError(str(e))
+
+# --- Common Validators ---
+
+def validate_uuid4(value):
+    from uuid import UUID
+    try:
+        val = UUID(value, version=4)
+    except ValueError:
+        raise ValidationError(f"Invalid UUID v4 format: {value}")
+    if val.hex != value.replace('-', ''):
+         raise ValidationError(f"Invalid UUID v4 format strictly matching: {value}")
+    return value
+
+def validate_altitude(data):
+    return _wrap_pydantic(AltitudeSchema, data)
+
+def validate_time_value(data):
+    return _wrap_pydantic(TimeSchema, data)
+
+def validate_volume4d(data):
+    return _wrap_pydantic(Volume4DSchema, data)
+
+def validate_uss_url(value):
+    try:
+        return validate_url_https_no_slash(value)
+    except ValueError as e:
+        raise ValidationError(str(e))
+
+def validate_latitude(value):
+    res = _wrap_pydantic(LatLngPointSchema, {"lat": value, "lng": 0})
+    return res["lat"] if isinstance(res, dict) else res
+
+def validate_longitude(value):
+    res = _wrap_pydantic(LatLngPointSchema, {"lat": 0, "lng": value})
+    return res["lng"] if isinstance(res, dict) else res
+
+def validate_latlng_point(data):
+    return _wrap_pydantic(LatLngPointSchema, data)
+
+def validate_radius(data):
+    return _wrap_pydantic(RadiusSchema, data)
+
+def validate_polygon(vertices):
+    res = _wrap_pydantic(PolygonSchema, {"vertices": vertices})
+    return res["vertices"] if isinstance(res, dict) else res
+
+# --- USS Validators ---
+
+def validate_flight_plan_id(value):
+    return validate_uuid4(value)
+
+def validate_basic_information(data):
+    return _wrap_pydantic(BasicInformationSchema, data)
+
+def validate_execution_style(value):
+    if value not in [e.value for e in ExecutionStyleEnum]:
+         raise ValidationError(f"Invalid ExecutionStyle: {value}")
+    return value
+
+def validate_flight_type(value):
+    if value not in [e.value for e in FlightTypeEnum]:
+        raise ValidationError(f"Invalid FlightType: {value}")
+    return value
+
+def validate_entity_ovn(value):
+    res = _wrap_pydantic(EntityOVNSchema, {"value": value})
+    return res["value"] if isinstance(res, dict) else res
+
+def validate_key(key_list):
+    if not isinstance(key_list, list):
+        raise ValidationError("Key must be a list.")
+    return [validate_entity_ovn(k) for k in key_list]
+
+def validate_uss_availability(value):
+    if value not in [e.value for e in USSAvailabilityEnum]:
+        raise ValidationError(f"Invalid availability: {value}")
+    return value
+
+def validate_subscription_url(value):
+    return validate_uss_url(value)
+
+def validate_implicit_subscription(value):
+    if not isinstance(value, bool):
+         raise ValidationError("implicit_subscription must be a boolean.")
+    return value
+
+def validate_dependent_operational_intents(value):
+    if not isinstance(value, list):
+         raise ValidationError("dependent_operational_intents must be a list of UUIDs.")
+    return [validate_uuid4(v) for v in value]
+
+def validate_notification_index(value):
+    if not isinstance(value, int) or value < 0:
+        raise ValidationError("notification_index must be a non-negative integer.")
+    return value
+
+# --- DSS Validators ---
+
+def validate_oir_payload(data):
+    return _wrap_pydantic(OIRPayloadSchema, data)
+
+def validate_area_of_interest(data):
+    return validate_volume4d(data)
+
+def validate_new_subscription(data):
+    return _wrap_pydantic(SubscriptionSchema, data)
+
+def validate_identifier(value):
+    return _wrap_pydantic(GeozoneSchema, {"identifier": value, "country": "BRA", "restriction": "COMMON", "region": 0, "reason": ["test"]})["identifier"]
+
+def validate_country(value):
+    return _wrap_pydantic(GeozoneSchema, {"identifier": "ZONE", "country": value, "restriction": "COMMON", "region": 0, "reason": ["test"]})["country"]
+
+def validate_restriction(value):
+    valid = ["COMMON", "CUSTOMIZED", "PROHIBITED", "REQ_AUTHORISATION", "CONDITIONAL", "NO_RESTRICTION"]
+    if value not in valid:
+        raise ValidationError(f"Invalid restriction: {value}. Valid options: {valid}")
+    return value
+
+def validate_authority(data):
+    return _wrap_pydantic(AuthoritySchema, data)
+
+def validate_entity_id(value):
+    return validate_uuid4(value)
+
+def validate_entity_version(value):
+    if not isinstance(value, int) or value < 0 or value > 2147483647:
+        raise ValidationError(f"EntityVersion {value} out of bit-32 range.")
+    return value
+
+def validate_internal_subscription_id(value):
+    return validate_uuid4(value)
+
+def validate_region(value):
+    return _wrap_pydantic(GeozoneSchema, {"identifier": "Z", "country": "BRA", "restriction": "COMMON", "region": value, "reason": ["test"]})["region"]
+
+def validate_reason_list(value):
+    return _wrap_pydantic(GeozoneSchema, {"identifier": "Z", "country": "BRA", "restriction": "COMMON", "region": 0, "reason": value})["reason"]
+
+def validate_interval_before(value):
+    import re
+    regex = r"^P(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?)?$"
+    if not isinstance(value, str) or not re.match(regex, value) or value in ("P", "PT"):
+        raise ValidationError(f"Interval before must be a valid ISO 8601 duration (PnnDTnnHnnM). Got: {value}")
+    return value
