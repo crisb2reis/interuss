@@ -3,6 +3,10 @@ from enum import Enum
 class CodeZoneTypeEnum(str, Enum):
     COMMON = "COMMON"
     CUSTOMIZED = "CUSTOMIZED"
+    PROHIBITED = "PROHIBITED"
+    REQ_AUTHORISATION = "REQ_AUTHORISATION"
+    CONDITIONAL = "CONDITIONAL"
+    NO_RESTRICTION = "NO_RESTRICTION"
 
 class CodeRestrictionTypeEnum(str, Enum):
     PROHIBITED = "PROHIBITED"

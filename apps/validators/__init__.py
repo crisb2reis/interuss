@@ -1,3 +1,20 @@
+"""
+apps/validators — Camada de validação Pydantic para o projeto InterUSS/BR-UTM.
+
+Estrutura:
+  common/  — tipos base (Volume4D, Altitude, Time, LatLng, Geo, API)
+  dss/     — schemas DSS: OIR, subscriptions, geozones ED-269, Remote ID
+  uss/     — schemas USS: flight planning, OI details, constraints, RID, drone mapping
+  tests/   — testes unitários pytest
+
+Padrão: todas as funções públicas convertem PydanticValidationError
+        em django.core.exceptions.ValidationError para compatibilidade Django.
+
+Referências normativas:
+  - ASTM F3548-21 (UTM)
+  - ED-269 (geozones U-Space)
+  - InterUSS Platform SCD test interface
+"""
 from pydantic import ValidationError as PydanticError, UUID4
 from django.core.exceptions import ValidationError
 
@@ -167,9 +184,9 @@ def validate_region(value):
 def validate_reason_list(value):
     dummy_auth = [{"name": "Auth", "email": "test@test.com", "purpose": "AUTHORIZATION"}]
     dummy_geom = [{"uomDimensions": "M", "horizontalProjection": {"type": "Polygon", "coordinates": [[[-1,-1], [-1,1], [1,1], [1,-1], [-1,-1]]]}}]
-    valid_reasons = [] if not value else [v if v in ["AIR_TRAFFIC", "SENSITIVE", "PRIVACY", "POPULATION", "NATURE", "NOISE", "FOREIGN_TERRITORY", "EMERGENCY", "OTHER"] else "OTHER" for v in value] # Avoid enum failure just to extract list if list itself is the target test
-    res = _wrap_pydantic(GeozoneSchema, {"identifier": "Z", "country": "BRA", "type": "COMMON", "restriction": "NO_RESTRICTION", "reason": valid_reasons, "zoneAuthority": dummy_auth, "geometry": dummy_geom})
-    return value # return original if passed validation (schema conversion might cast enums)
+    valid_reasons = [] if not value else [v if v in ["AIR_TRAFFIC", "SENSITIVE", "PRIVACY", "POPULATION", "NATURE", "NOISE", "FOREIGN_TERRITORY", "EMERGENCY", "OTHER"] else "OTHER" for v in value]
+    _wrap_pydantic(GeozoneSchema, {"identifier": "Z", "country": "BRA", "type": "COMMON", "restriction": "NO_RESTRICTION", "reason": valid_reasons, "zoneAuthority": dummy_auth, "geometry": dummy_geom})
+    return value
 
 def validate_interval_before(value):
     import re
@@ -177,3 +194,222 @@ def validate_interval_before(value):
     if not isinstance(value, str) or not re.match(regex, value) or value in ("P", "PT"):
         raise ValidationError(f"Interval before must be a valid ISO 8601 duration (PnnDTnnHnnM). Got: {value}")
     return value
+
+# --- Geospatial Validators (Fase 2) ---
+
+from .common.geospatial_schemas import (
+    GeospatialMapHttpSourceSchema,
+    GeospatialDataSourceStatusSchema,
+    GeospatialDataSourceResponseSchema,
+    ListGeospatialDataSourcesResponseSchema,
+    GeospatialMapQueryReplySchema,
+    GeospatialMapCheckResultSchema,
+    StatusResponseSchema as GeospatialStatusResponseSchema,
+)
+
+from .common.geo_schemas import (
+    PositionSchema,
+    GeoZoneSchema as GeoZoneGenericSchema,
+)
+
+
+def validate_position(data):
+    """Valida posição genérica conforme geo.py."""
+    return _wrap_pydantic(PositionSchema, data)
+
+
+def validate_geozone_generic(data):
+    """Valida geozone conforme estrutura genérica de geo.py."""
+    return _wrap_pydantic(GeoZoneGenericSchema, data)
+
+
+def validate_geospatial_http_source(data):
+    return _wrap_pydantic(GeospatialMapHttpSourceSchema, data)
+
+def validate_geospatial_data_source_status(data):
+    return _wrap_pydantic(GeospatialDataSourceStatusSchema, data)
+
+def validate_geospatial_query_reply(data):
+    return _wrap_pydantic(GeospatialMapQueryReplySchema, data)
+
+# --- Flight Planning Validators (Fase 2) ---
+
+from .uss.flight_planning_schemas import (
+    UpsertFlightPlanRequestSchema,
+    UpsertFlightPlanResponseSchema,
+    DeleteFlightPlanResponseSchema,
+    ClearAreaRequestSchema,
+    ClearAreaOutcomeSchema,
+    ClearAreaResponseSchema,
+    UserNotificationSchema,
+    QueryUserNotificationsResponseSchema,
+    PlanningActivityResultEnum,
+    FlightPlanStatusEnum,
+    AdvisoryInclusionEnum,
+)
+
+def validate_upsert_flight_plan_request(data):
+    return _wrap_pydantic(UpsertFlightPlanRequestSchema, data)
+
+def validate_clear_area_request(data):
+    return _wrap_pydantic(ClearAreaRequestSchema, data)
+
+def validate_clear_area_outcome(data):
+    return _wrap_pydantic(ClearAreaOutcomeSchema, data)
+
+def validate_user_notification(data):
+    return _wrap_pydantic(UserNotificationSchema, data)
+
+def validate_planning_activity_result(value):
+    if value not in [e.value for e in PlanningActivityResultEnum]:
+        raise ValidationError(f"Invalid PlanningActivityResult: {value}")
+    return value
+
+def validate_flight_plan_status(value):
+    if value not in [e.value for e in FlightPlanStatusEnum]:
+        raise ValidationError(f"Invalid FlightPlanStatus: {value}")
+    return value
+
+def validate_advisory_inclusion(value):
+    if value not in [e.value for e in AdvisoryInclusionEnum]:
+        raise ValidationError(f"Invalid AdvisoryInclusion: {value}")
+    return value
+
+# --- Remote ID DSS Validators (Fase 3) ---
+
+from .dss.remoteid_schemas import (
+    IdentificationServiceAreaSchema,
+    IdentificationServiceAreaFullSchema,
+    RIDSubscriptionSchema,
+    CreateISAParametersSchema,
+    UpdateISAParametersSchema,
+    PutISAResponseSchema,
+    DeleteISAResponseSchema,
+    GetISAResponseSchema,
+    SearchISAResponseSchema,
+    CreateRIDSubscriptionParametersSchema,
+    PutRIDSubscriptionResponseSchema,
+    DeleteRIDSubscriptionResponseSchema,
+    GetRIDSubscriptionResponseSchema,
+    SearchRIDSubscriptionsResponseSchema,
+)
+
+def validate_isa(data):
+    return _wrap_pydantic(IdentificationServiceAreaSchema, data)
+
+def validate_create_isa_parameters(data):
+    return _wrap_pydantic(CreateISAParametersSchema, data)
+
+def validate_rid_subscription(data):
+    return _wrap_pydantic(RIDSubscriptionSchema, data)
+
+def validate_create_rid_subscription(data):
+    return _wrap_pydantic(CreateRIDSubscriptionParametersSchema, data)
+
+# --- Remote ID USS Validators (Fase 3) ---
+
+from .uss.remoteid_schemas import (
+    RIDAircraftPositionSchema,
+    RIDAircraftStateSchema,
+    RIDFlightSchema,
+    RIDFlightDetailsSchema,
+    GetFlightsResponseSchema,
+    GetFlightDetailsResponseSchema,
+    PutIdentificationServiceAreaNotificationParametersSchema,
+)
+
+def validate_rid_aircraft_position(data):
+    return _wrap_pydantic(RIDAircraftPositionSchema, data)
+
+def validate_rid_flight(data):
+    return _wrap_pydantic(RIDFlightSchema, data)
+
+def validate_rid_flight_details(data):
+    return _wrap_pydantic(RIDFlightDetailsSchema, data)
+
+def validate_isa_notification(data):
+    return _wrap_pydantic(PutIdentificationServiceAreaNotificationParametersSchema, data)
+
+# --- Drone Mapping Validators (Fase 4) ---
+
+from .uss.drone_mapping_schemas import (
+    CreateDroneMappingRequestSchema,
+    BulkCreateDroneMappingsRequestSchema,
+    UpdateDroneMappingRequestSchema,
+)
+
+def validate_create_drone_mapping(data):
+    return _wrap_pydantic(CreateDroneMappingRequestSchema, data)
+
+def validate_bulk_create_drone_mappings(data):
+    return _wrap_pydantic(BulkCreateDroneMappingsRequestSchema, data)
+
+def validate_update_drone_mapping(data):
+    return _wrap_pydantic(UpdateDroneMappingRequestSchema, data)
+
+# --- Flight Strip Validators (Fase 4) ---
+
+from .uss.flight_strip_schemas import (
+    CreateFlightStripRequestSchema,
+    UpdateFlightStripRequestSchema,
+    SearchFlightStripsRequestSchema,
+    FlightAreaEnum,
+)
+
+def validate_create_flight_strip(data):
+    return _wrap_pydantic(CreateFlightStripRequestSchema, data)
+
+def validate_update_flight_strip(data):
+    return _wrap_pydantic(UpdateFlightStripRequestSchema, data)
+
+def validate_search_flight_strips(data):
+    return _wrap_pydantic(SearchFlightStripsRequestSchema, data)
+
+def validate_flight_area(value):
+    if value not in [e.value for e in FlightAreaEnum]:
+        raise ValidationError(f"Invalid FlightArea: {value}. Valid: {[e.value for e in FlightAreaEnum]}")
+    return value
+
+
+# --- Airspace Validators (Fase 4) ---
+
+from .common.airspace_schemas import AirspaceAllocationsSchema, AirspaceFlightsSchema
+
+
+def validate_airspace_allocations(data):
+    """Valida o payload completo de alocações de espaço aéreo (OIs + Constraints + ISAs)."""
+    return _wrap_pydantic(AirspaceAllocationsSchema, data)
+
+
+def validate_airspace_flights(data):
+    """Valida a lista de voos RID associados a uma janela de espaço aéreo."""
+    return _wrap_pydantic(AirspaceFlightsSchema, data)
+
+
+# --- API Response Validators (Fase 4) ---
+
+from .common.api_schemas import ApiResponseSchema
+
+
+def validate_api_response(data):
+    """Valida a estrutura genérica de resposta da API (message + data)."""
+    return _wrap_pydantic(ApiResponseSchema, data)
+
+
+# --- Telemetry Validators (Fase 3 — consolidação) ---
+
+from .uss.telemetry_schemas import (
+    VehicleTelemetrySchema,
+    VelocitySchema,
+    GetOperationalIntentTelemetryResponseSchema,
+)
+
+
+def validate_vehicle_telemetry(data):
+    """Valida telemetria de veículo (posição + velocidade + timestamp). ASTM F3548-21 §A3.3."""
+    return _wrap_pydantic(VehicleTelemetrySchema, data)
+
+
+def validate_telemetry_response(data):
+    """Valida resposta completa de telemetria de operational intent off-nominal."""
+    return _wrap_pydantic(GetOperationalIntentTelemetryResponseSchema, data)

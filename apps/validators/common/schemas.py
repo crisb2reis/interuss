@@ -4,6 +4,42 @@ from datetime import datetime
 from urllib.parse import urlparse
 from enum import Enum
 
+class AuthorityEnum(str, Enum):
+    STRATEGIC_COORDINATION = "utm.strategic_coordination"
+    CONSTRAINT_MANAGEMENT = "utm.constraint_management"
+    CONSTRAINT_PROCESSING = "utm.constraint_processing"
+    CONFORMANCE_MONITORING_SA = "utm.conformance_monitoring_sa"
+    AVAILABILITY_ARBITRATION = "utm.availability_arbitration"
+    AVIATION_AUTHORITY = "utm.aviation_authority"
+
+class OperationProfileEnum(str, Enum):
+    PADRAO = "Padrão"
+    ESPECIAL_ORGAOS_GOVERNO = "Especial - Órgãos de Governo"
+    ESPECIAL_OUTROS = "Especial - Outros"
+    AEROLEVANTAMENTO = "Aerolevantamento"
+    ENTORNO_ESTRUTURA = "Entorno de Estrutura"
+    AEROAGRICOLA = "Aeroagrícola"
+    ATIPICO = "Atípico"
+
+class ContingencyStrategyEnum(str, Enum):
+    RTH = "Return to Home (RTH)"
+    PARACHUTE = "Parachute"
+
+class UserNotificationEventEnum(str, Enum):
+    GEN0400 = "GEN0400"
+    GEN0405 = "GEN0405"
+    SCD0090 = "SCD0090"
+    SCD0095 = "SCD0095"
+    ACM0010 = "ACM0010"
+    CMSA0115 = "CMSA0115"
+    CMSA0300 = "CMSA0300"
+    CSTP0005 = "CSTP0005"
+    CSTP0010 = "CSTP0010"
+    CSTP0020 = "CSTP0020"
+    CSTP0025 = "CSTP0025"
+    CSTP0030 = "CSTP0030"
+    CSTP0035 = "CSTP0035"
+
 def validate_url_https_no_slash(v: str) -> str:
     result = urlparse(v)
     if result.scheme != "https":
