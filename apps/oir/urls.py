@@ -12,6 +12,10 @@ urlpatterns = [
     path("oir/query_dss/", views.QueryDSSConstraintsView.as_view(), name="query-dss-constraints"),
     path("oir/search_dss/", views.SearchDSSOIRView.as_view(), name="search-dss-oirs"),
 
+    # Fluxo completo: OIR próxima a Constraint (ASTM F3548-21)
+    path("oir/create_near_constraint/", views.CreateOIRNearConstraintView.as_view(), name="create-oir-near-constraint"),
+    path("oir/create_with_conflict_resolution/", views.CreateOIRWithConflictResolutionView.as_view(), name="create-oir-conflict-resolution"),
+
     # OIR CRUD
     path("oir/", views.OIRListCreateView.as_view(), name="oir-list-create"),
     path("oir/<uuid:pk>/", views.OIRDetailView.as_view(), name="oir-detail"),

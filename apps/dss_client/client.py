@@ -134,10 +134,12 @@ class DSSClient:
         if response.status_code == 409:
             try:
                 error_data = response.json()
-                conflicting = (
-                    error_data.get("missing_operational_intents", [])
+                # O DSS pode retornar conflitos como OIRs ou Constraints ausentes.
+                # É preciso coletar AMBOS para poder passar os OVNs corretos no retry.
+                missing_oirs = error_data.get("missing_operational_intents", []) \
                     or error_data.get("operational_intent_references", [])
-                )
+                missing_constraints = error_data.get("missing_constraints", [])
+                conflicting = missing_oirs + missing_constraints
                 raise DSSConflictError(
                     f"Conflito detectado [409]: {response.text}",
                     conflicting_references=conflicting,
@@ -185,12 +187,105 @@ class DSSClient:
 
     def get_constraint_reference(self, constraint_id: str) -> Dict[str, Any]:
         """
-        Obtém detalhes de uma constraint específica.
+        Obtém detalhes de uma constraint específica no DSS.
         GET /dss/v1/constraint_references/{entityid}
         """
         if not constraint_id:
             raise DSSValidationError("constraint_id é obrigatório.")
         return self._request("GET", f"/dss/v1/constraint_references/{constraint_id}")
+
+    def get_constraint_details_from_provider(
+        self,
+        constraint_id: str,
+        cp_uss_base_url: str,
+    ) -> Dict[str, Any]:
+        """
+        Busca os detalhes completos de uma Constraint diretamente no
+        Constraint Provider (CP), conforme fluxo ASTM F3548-21.
+
+        Fluxo:
+            USS → AUTH: GET /token?aud=<domínio do CP>&scope=utm.constraint_processing
+            USS → CP:   GET {cp_uss_base_url}/uss/v1/constraints/{constraint_id}
+
+        Args:
+            constraint_id: ID da constraint conforme retornado pelo DSS.
+            cp_uss_base_url: URL base do Constraint Provider (campo uss_base_url
+                             retornado na constraint reference do DSS).
+
+        Returns:
+            Dicionário com os detalhes completos da constraint.
+
+        Raises:
+            DSSValidationError: Se os argumentos forem inválidos.
+            DSSAuthenticationError: Se o token para o CP não puder ser obtido.
+            DSSConnectionError: Se a chamada ao CP falhar.
+        """
+        if not constraint_id:
+            raise DSSValidationError("constraint_id é obrigatório.")
+        if not cp_uss_base_url:
+            raise DSSValidationError("cp_uss_base_url é obrigatório.")
+
+        cp_base = cp_uss_base_url.rstrip("/")
+
+        # Extrai o domínio da URL do CP para usar como audience do JWT
+        parsed = urllib.parse.urlparse(cp_base)
+        cp_audience = parsed.netloc  # ex: "cp.sandbox.br-utm.org"
+
+        logger.info(
+            "Obtendo token para Constraint Provider | audience=%s scope=utm.constraint_processing",
+            cp_audience,
+        )
+
+        # Autenticar com audience do CP e escopo de processamento de constraints
+        cp_token = self.authenticator.get_token(
+            intended_audience=cp_audience,
+            scope="utm.constraint_processing",
+        )
+
+        # Fazer GET no endpoint USS do Constraint Provider
+        cp_url = f"{cp_base}/uss/v1/constraints/{constraint_id}"
+        logger.info("GET %s", cp_url)
+
+        headers = {
+            "Authorization": f"Bearer {cp_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        try:
+            response = requests.get(cp_url, headers=headers, timeout=30)
+        except requests.exceptions.ConnectionError as exc:
+            raise DSSConnectionError(
+                f"Falha de conexão com o Constraint Provider {cp_base}: {exc}"
+            ) from exc
+        except requests.exceptions.Timeout as exc:
+            raise DSSConnectionError(
+                f"Timeout ao acessar o Constraint Provider {cp_base}."
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise DSSConnectionError(f"Erro de rede ao acessar CP: {exc}") from exc
+
+        if response.status_code == 401:
+            raise DSSAuthenticationError(
+                f"Token inválido para o Constraint Provider [401]: {response.text}"
+            )
+        if response.status_code == 403:
+            raise DSSAuthorizationError(
+                f"Acesso negado ao Constraint Provider [403]: {response.text}"
+            )
+        if response.status_code == 404:
+            raise DSSNotFoundError(
+                f"Constraint {constraint_id} não encontrada no CP [404]: {response.text}"
+            )
+        if response.status_code >= 400:
+            raise DSSConnectionError(
+                f"Erro HTTP [{response.status_code}] ao acessar CP: {response.text}"
+            )
+
+        logger.info(
+            "Detalhes da constraint %s obtidos do CP %s", constraint_id, cp_base
+        )
+        return response.json() if response.text.strip() else {}
 
     # ─── Operational Intent References (OIR) ─────────────────────
 
@@ -327,3 +422,83 @@ class DSSClient:
             "/dss/v1/operational_intent_references/query",
             json={"area_of_interest": area},
         )
+
+    def get_oir_details_from_peer_uss(
+        self,
+        oir_id: str,
+        peer_uss_base_url: str,
+    ) -> Dict[str, Any]:
+        """
+        Busca os detalhes completos de uma OIR diretamente em outro USS,
+        conforme fluxo ASTM F3548-21 para resolução de conflitos.
+
+        Fluxo:
+            USS → AUTH: GET /token?aud=<domínio do USS-2>
+            USS → USS-2: GET {peer_uss_base_url}/uss/v1/operational_intents/{oir_id}
+        """
+        if not oir_id:
+            raise DSSValidationError("oir_id é obrigatório.")
+        if not peer_uss_base_url:
+            raise DSSValidationError("peer_uss_base_url é obrigatório.")
+
+        peer_base = peer_uss_base_url.rstrip("/")
+
+        # Extrai o domínio da URL do USS para usar como audience do JWT
+        parsed = urllib.parse.urlparse(peer_base)
+        peer_audience = parsed.netloc
+
+        logger.info(
+            "Obtendo token para Peer USS | audience=%s scope=utm.strategic_coordination",
+            peer_audience,
+        )
+
+        # Autenticar com audience do peer e escopo estratégico
+        peer_token = self.authenticator.get_token(
+            intended_audience=peer_audience,
+            scope="utm.strategic_coordination",
+        )
+
+        # Fazer GET no endpoint peer-to-peer do USS
+        peer_url = f"{peer_base}/uss/v1/operational_intents/{oir_id}"
+        logger.info("GET %s", peer_url)
+
+        headers = {
+            "Authorization": f"Bearer {peer_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        try:
+            response = requests.get(peer_url, headers=headers, timeout=30)
+        except requests.exceptions.ConnectionError as exc:
+            raise DSSConnectionError(
+                f"Falha de conexão com o Peer USS {peer_base}: {exc}"
+            ) from exc
+        except requests.exceptions.Timeout as exc:
+            raise DSSConnectionError(
+                f"Timeout ao acessar o Peer USS {peer_base}."
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise DSSConnectionError(f"Erro de rede ao acessar Peer USS: {exc}") from exc
+
+        if response.status_code == 401:
+            raise DSSAuthenticationError(
+                f"Token inválido para o Peer USS [401]: {response.text}"
+            )
+        if response.status_code == 403:
+            raise DSSAuthorizationError(
+                f"Acesso negado ao Peer USS [403]: {response.text}"
+            )
+        if response.status_code == 404:
+            raise DSSNotFoundError(
+                f"OIR {oir_id} não encontrada no Peer USS [404]: {response.text}"
+            )
+        if response.status_code >= 400:
+            raise DSSConnectionError(
+                f"Erro HTTP [{response.status_code}] ao acessar Peer USS: {response.text}"
+            )
+
+        logger.info(
+            "Detalhes da OIR %s obtidos do Peer USS %s", oir_id, peer_base
+        )
+        return response.json() if response.text.strip() else {}

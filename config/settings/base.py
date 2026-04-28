@@ -16,6 +16,7 @@ environ.Env.read_env(BASE_DIR / '.env')
 SECRET_KEY = env('SECRET_KEY', default='django-insecure-dev-key')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env('ALLOWED_HOSTS')
+FORCE_SCRIPT_NAME = env('FORCE_SCRIPT_NAME', default=None)
 
 INSTALLED_APPS = [
     'django.contrib.admin',

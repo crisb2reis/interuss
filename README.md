@@ -1,92 +1,115 @@
-# InterUSS
+# InterUSS - UAS Service Supplier (USS)
 
+Este projeto implementa um **UAS Service Supplier (USS)** em conformidade com as especificações **ASTM F3548-21** (Interoperabilidade de UTM) e **ED-269**. Ele fornece uma interface para gestão de intenções operacionais, planos de voo e integração com o ecossistema **BR-UTM**.
 
+## 🚀 Como Subir a Aplicação
 
-## Getting started
+A aplicação foi configurada para rodar preferencialmente via Docker para garantir que todas as dependências espaciais (PostGIS/GDAL) funcionem corretamente.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+### 1. Pré-requisitos
+- Docker e Docker Compose instalados.
+- Rede Docker `uss_default` criada. Caso não exista, crie com:
+  ```bash
+  docker network create uss_default
+  ```
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+### 2. Configuração de Ambiente
+Crie um arquivo `.env` na raiz do projeto. O arquivo `.env` deve conter as credenciais de acesso ao DSS e configurações do banco de dados. 
 
-## Add your files
+**Exemplo de `.env` (Configurado para acesso Local):**
+```env
+SECRET_KEY=django-insecure-dev-key
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+# Para rodar via 'python manage.py' localmente:
+DATABASE_URL=postgis://uss_user:uss_password@localhost:5435/uss_db
+REDIS_URL=redis://localhost:6380/0
 
+# Outras configs
+ICEA_AUTH_URL=https://api.sandbox.br-utm.org/token
+ICEA_API_KEY=brutm
+DSS_BASE_URL=https://api.sandbox.br-utm.org
+USS_BASE_URL=http://localhost:8001
+USS_IDENTIFIER=uss-interuss
 ```
-cd existing_repo
-git remote add origin http://172.18.31.35/projetoregistroswimbr/interuss.git
-git branch -M main
-git push -uf origin main
+
+> [!NOTE]
+> O arquivo `docker-compose.yml` deste projeto já possui sobrescritas automáticas para que, **dentro do container**, a aplicação consiga achar os serviços usando os nomes de host do Docker (`db` e `redis`). O `.env` acima é otimizado para quando você estiver rodando comandos diretamente no seu terminal (como `python manage.py migrate`).
+
+### 3. Subindo com Docker
+Para subir a aplicação e seus serviços de suporte:
+
+```bash
+# Sobe a aplicação em modo background e reconstrói se necessário
+docker compose up -d --build
 ```
 
-## Integrate with your tools
+O comando acima irá:
+1. Construir a imagem Docker (`Dockerfile`).
+2. Executar as migrações do banco de dados automaticamente.
+3. Iniciar o servidor de desenvolvimento na porta `8001`.
 
-- [ ] [Set up project integrations](http://172.18.31.35/projetoregistroswimbr/interuss/-/settings/integrations)
+Verifique se está rodando acessando: [http://localhost:8001/](http://localhost:8001/)
 
-## Collaborate with your team
+---
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+## 🛠️ Desenvolvimento Local (Sem Docker)
 
-## Test and Deploy
+Para rodar localmente sem Docker, é necessário ter o **PostgreSQL com PostGIS** e as bibliotecas **GDAL/GEOS** instaladas no sistema operacional.
 
-Use the built-in continuous integration in GitLab.
+1. **Criar Ambiente Virtual:**
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+2. **Instalar Dependências:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-***
+3. **Configurar Variáveis:**
+   Exporte as variáveis do `.env` ou crie o arquivo na raiz.
 
-# Editing this README
+4. **Rodar Migrações:**
+   ```bash
+   python3 manage.py migrate
+   ```
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+5. **Iniciar Servidor:**
+   > [!IMPORTANT]
+   > Se o Docker estiver rodando, a porta `8001` estará ocupada. Pare o container com `docker compose stop web` ou use uma porta diferente (ex: `8002`).
 
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+   ```bash
+   python3 manage.py runserver 0.0.0.0:8001
+   ```
 
-## Name
-Choose a self-explaining name for your project.
+---
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+## 📁 Estrutura de Apps
+- `apps.oir`: Gestão de Operational Intent References (OIR).
+- `apps.flight_plans`: Gestão e validação de planos de voo seguindo ASTM F3548-21.
+- `apps.dss_client`: Cliente para integração com o Discovery and Synchronization Service (DSS).
+- `apps.validators`: Esquemas de validação Pydantic para payloads ASTM e ED-269.
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+---
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+## 📡 Endpoints Principais
+- `GET /`: Health check e listagem de endpoints.
+- `GET /api/oir/`: Lista intenções operacionais locais.
+- `GET /api/oir/search_dss/`: Busca intenções operacionais no DSS.
+- `PUT /api/flight_plans/`: Cria ou atualiza um plano de voo.
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+---
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## 📝 Logs e Debug
+Para visualizar os logs em tempo real:
+```bash
+docker compose logs -f web
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Para acessar o shell do container:
+```bash
+docker exec -it uss-web-app bash
+```

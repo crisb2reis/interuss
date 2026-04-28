@@ -42,6 +42,7 @@ class ASTMBasicInformationSerializer(serializers.Serializer):
 class ASTMFlightPlanBodySerializer(serializers.Serializer):
     basic_information = ASTMBasicInformationSerializer()
     uas = serializers.CharField(required=False, allow_blank=True, default="")
+    priority = serializers.IntegerField(required=False, default=0)
     operator = serializers.CharField(required=False, allow_blank=True, default="")
     telemetry = serializers.CharField(required=False, allow_blank=True, default="")
     astm_f3548_21 = serializers.CharField(required=False, allow_blank=True, default="")

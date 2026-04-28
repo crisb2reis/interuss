@@ -24,6 +24,10 @@ class OperationalIntent(models.Model):
     uss_base_url = models.URLField(
         help_text="URL base da USS responsável por esta OIR."
     )
+    priority = models.IntegerField(
+        default=0,
+        help_text="Prioridade da operação. Valores maiores = maior prioridade."
+    )
     # Dados retornados pelo DSS após submissão
     dss_id = models.CharField(
         max_length=255,

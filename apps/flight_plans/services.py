@@ -14,20 +14,35 @@ class OperationalIntentService:
     Em conformidade com ASTM F3548-22.
     """
 
+    # Configurações de janela de tempo para consultas ao DSS (em minutos)
+    DSS_QUERY_BUFFER_START = 15
+    DSS_QUERY_BUFFER_END = 15
+    
+    # Placeholder de Subscription que deve ser ignorado
+    PLACEHOLDER_SUB = "00000000-0000-4000-8000-000000000000"
+
     @staticmethod
-    def _build_client() -> DSSClient:
-        """Instancia o DSSClient com token de coordenação estratégica."""
+    def _build_client(scope: str = UTMAuthority.STRATEGIC_COORDINATION) -> DSSClient:
+        """Instancia o DSSClient com o token do escopo solicitado."""
         authenticator = ICEAAuthenticator()
         token = authenticator.get_token(
             intended_audience="core-service",
-            scope=UTMAuthority.STRATEGIC_COORDINATION,
+            scope=scope,
         )
         return DSSClient(token=token)
 
     @staticmethod
-    def _build_extents(intent: OperationalIntent) -> list:
-        """Converte o volume PostGIS em payload de extents para o DSS."""
-        coords = intent.flight_plan.volume.coords[0][:-1]  # Exclui vértice duplicado
+    def _build_extents(intent: OperationalIntent, buffer_minutes_start=0, buffer_minutes_end=0) -> list:
+        """
+        Converte o volume PostGIS em payload de extents para o DSS.
+        Opcionalmente adiciona um buffer temporal em minutos para consultas.
+        """
+        from datetime import timedelta
+        
+        start_time = intent.flight_plan.start_time - timedelta(minutes=buffer_minutes_start)
+        end_time = intent.flight_plan.end_time + timedelta(minutes=buffer_minutes_end)
+        
+        coords = intent.flight_plan.volume.coords[0][:-1]
         return [{
             "volume": {
                 "outline_polygon": {
@@ -37,11 +52,11 @@ class OperationalIntentService:
                 "altitude_upper": {"value": 120, "reference": "W84", "units": "M"},
             },
             "time_start": {
-                "value": intent.flight_plan.start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + "Z",
+                "value": start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + "Z",
                 "format": "RFC3339",
             },
             "time_end": {
-                "value": intent.flight_plan.end_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + "Z",
+                "value": end_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + "Z",
                 "format": "RFC3339",
             },
         }]
@@ -50,63 +65,77 @@ class OperationalIntentService:
     def create_operational_intent(flight_plan_id: str):
         """
         Registra um FlightPlan existente no DSS como OIR.
-
-        1. Consulta constraints na área (ASTM § 4.3.1)
-        2. Faz discovery das OIRs vizinhas para coletar OVNs (chaves)
-        3. Submete a nova OIR ao DSS (create — sem OVN)
-        4. Persiste a resposta local (dss_id, ovn, subscription_id)
-
-        Returns:
-            (intent, result_dict)
-        Raises:
-            DSSConflictError: se o DSS reportar conflito 409
+        1. Consulta vizinhos com buffers temporários configuráveis.
+        2. Tenta submissão e realiza retry automático se houver conflito 409.
         """
         fp: FlightPlan = FlightPlan.objects.get(pk=flight_plan_id)
 
         intent, _ = OperationalIntent.objects.get_or_create(
             flight_plan=fp,
-            defaults={"state": State.ACCEPTED},
+            defaults={"state": fp.state},
         )
+        if intent.state != fp.state:
+            intent.state = fp.state
+            intent.save()
 
-        client = OperationalIntentService._build_client()
-        extents = OperationalIntentService._build_extents(intent)
-        area = extents[0]  # Usa o primerio extent como área de interesse
+        # Clients separados por scope
+        client_coord = OperationalIntentService._build_client(scope=UTMAuthority.STRATEGIC_COORDINATION)
+        client_constraint = OperationalIntentService._build_client(scope=UTMAuthority.CONSTRAINT_PROCESSING)
+        
+        # Área de consulta com buffer temporal
+        area_query = OperationalIntentService._build_extents(
+            intent, 
+            buffer_minutes_start=OperationalIntentService.DSS_QUERY_BUFFER_START,
+            buffer_minutes_end=OperationalIntentService.DSS_QUERY_BUFFER_END
+        )[0]
+        
+        # Extents reais para submissão (sem buffer)
+        extents_real = OperationalIntentService._build_extents(intent)
 
-        # 1. Consulta constraints
-        try:
-            constraints = client.query_constraint_references(area)
-            if constraints.get("constraint_references"):
-                logger.warning(
-                    "Constraints encontradas na área do FlightPlan %s: %d",
-                    flight_plan_id, len(constraints["constraint_references"]),
-                )
-        except Exception as exc:
-            logger.warning("Falha ao consultar constraints: %s", exc)
-
-        # 2. Discovery de OIRs vizinhas — coleta OVNs
+        # 1. Coleta de OVNs (Chaves)
         keys = []
         try:
-            neighbor_result = client.query_operational_intent_references(area)
+            # OIRs vizinhas
+            neighbor_result = client_coord.query_operational_intent_references(area_query)
             for oir in neighbor_result.get("operational_intent_references", []):
-                if oir.get("ovn"):
+                if oir.get("id") != str(fp.id) and oir.get("ovn"):
                     keys.append(oir["ovn"])
-            if keys:
-                logger.info(
-                    "%d OIRs vizinhas encontradas. Adicionando chaves ao payload.", len(keys)
-                )
+            
+            # Constraints vizinhas
+            constraint_result = client_constraint.query_constraint_references(area_query)
+            for con in constraint_result.get("constraint_references", []):
+                if con.get("ovn"):
+                    keys.append(con["ovn"])
         except Exception as exc:
-            logger.warning("Falha ao consultar OIRs vizinhas: %s", exc)
+            logger.warning("Falha na coleta inicial de chaves: %s", exc)
 
-        # 3. Submissão ao DSS (create — sem OVN na URL)
-        result = client.create_operational_intent_reference(
-            oir_id=str(fp.id),
-            extents=extents,
-            uss_base_url=settings.USS_BASE_URL,
-            state="Accepted",
-            key=keys,
-        )
+        # 2. Submissão com Retry Automático
+        try:
+            result = client_coord.create_operational_intent_reference(
+                oir_id=str(fp.id),
+                extents=extents_real,
+                uss_base_url=settings.USS_BASE_URL,
+                state=intent.state.capitalize(),
+                key=keys,
+            )
+        except DSSConflictError as exc:
+            logger.info("Conflito 409 no Create. Realizando retry com OVNs faltantes...")
+            for ref in exc.conflicting_references:
+                ovn = ref.get("ovn")
+                if ovn and ovn not in keys:
+                    keys.append(ovn)
+            
+            if not keys: raise exc
+            
+            result = client_coord.create_operational_intent_reference(
+                oir_id=str(fp.id),
+                extents=extents_real,
+                uss_base_url=settings.USS_BASE_URL,
+                state=intent.state.capitalize(),
+                key=keys,
+            )
 
-        # 4. Persiste resposta
+        # 3. Persiste resposta
         dss_ref = result.get("operational_intent_reference", {})
         intent.dss_id = dss_ref.get("id", "")
         intent.version = dss_ref.get("version", 0)
@@ -114,37 +143,105 @@ class OperationalIntentService:
         intent.subscription_id = dss_ref.get("subscription_id", "")
         intent.save()
 
-        logger.info("OIR sincronizada com sucesso. DSS ID: %s | OVN: %s", intent.dss_id, intent.ovn)
+        logger.info("OIR sincronizada (Create). DSS ID: %s | OVN: %s", intent.dss_id, intent.ovn)
         return intent, result
 
     @staticmethod
     def update_operational_intent(flight_plan_id: str):
         """
         Atualiza uma OIR já registrada no DSS usando o OVN corrente.
-        PUT /dss/v1/operational_intent_references/{entityid}/{ovn}
+        Implementa retry automático para tratar conflitos de OVN/Chaves (409).
         """
         intent = OperationalIntent.objects.get(flight_plan_id=flight_plan_id)
+        fp = intent.flight_plan
+
+        if intent.state != fp.state:
+            intent.state = fp.state
+            intent.save()
 
         if not intent.ovn:
             raise ValueError("OVN não disponível — crie a OIR primeiro.")
 
-        client = OperationalIntentService._build_client()
-        extents = OperationalIntentService._build_extents(intent)
+        # Clients separados por scope
+        client_coord = OperationalIntentService._build_client(scope=UTMAuthority.STRATEGIC_COORDINATION)
+        client_constraint = OperationalIntentService._build_client(scope=UTMAuthority.CONSTRAINT_PROCESSING)
 
-        result = client.update_operational_intent_reference(
-            oir_id=str(intent.flight_plan.id),
-            ovn=intent.ovn,
-            extents=extents,
-            uss_base_url=settings.USS_BASE_URL,
-            state=intent.state.capitalize(),
-        )
+        # Área de consulta com buffer temporal
+        area_query = OperationalIntentService._build_extents(
+            intent, 
+            buffer_minutes_start=OperationalIntentService.DSS_QUERY_BUFFER_START,
+            buffer_minutes_end=OperationalIntentService.DSS_QUERY_BUFFER_END
+        )[0]
+        
+        # Extents reais para submissão
+        extents_real = OperationalIntentService._build_extents(intent)
+
+        new_subscription = None
+        if intent.state == State.ACTIVATED:
+            new_subscription = {
+                "uss_base_url": settings.USS_BASE_URL,
+                "notify_for_operational_intents": True,
+                "notify_for_constraints": True,
+            }
+
+        # 1. Coleta de OVNs (chaves)
+        keys = []
+        try:
+            # OIRs vizinhas
+            neighbors = client_coord.query_operational_intent_references(area_query)
+            for oir in neighbors.get("operational_intent_references", []):
+                if oir.get("id") != str(intent.flight_plan.id) and oir.get("ovn"):
+                    keys.append(oir["ovn"])
+            
+            # Constraints vizinhas
+            constraints = client_constraint.query_constraint_references(area_query)
+            for con in constraints.get("constraint_references", []):
+                if con.get("ovn"):
+                    keys.append(con["ovn"])
+        except Exception as exc:
+            logger.warning("Falha na coleta inicial de chaves para update: %s", exc)
+
+        # Limpeza de Subscription ID (não enviar placeholder)
+        sub_id = intent.subscription_id if intent.subscription_id != OperationalIntentService.PLACEHOLDER_SUB else None
+
+        # 2. Submissão com Retry Automático
+        try:
+            result = client_coord.update_operational_intent_reference(
+                oir_id=str(intent.flight_plan.id),
+                ovn=intent.ovn,
+                extents=extents_real,
+                uss_base_url=settings.USS_BASE_URL,
+                state=intent.state.capitalize(),
+                subscription_id=sub_id,
+                new_subscription=new_subscription,
+                key=keys,
+            )
+        except DSSConflictError as exc:
+            logger.info("Conflito 409 no Update. Realizando retry com OVNs faltantes...")
+            for ref in exc.conflicting_references:
+                ovn = ref.get("ovn")
+                if ovn and ovn not in keys:
+                    keys.append(ovn)
+            
+            if not keys: raise exc
+            
+            result = client_coord.update_operational_intent_reference(
+                oir_id=str(intent.flight_plan.id),
+                ovn=intent.ovn,
+                extents=extents_real,
+                uss_base_url=settings.USS_BASE_URL,
+                state=intent.state.capitalize(),
+                subscription_id=sub_id,
+                new_subscription=new_subscription,
+                key=keys,
+            )
 
         dss_ref = result.get("operational_intent_reference", {})
         intent.version = dss_ref.get("version", intent.version)
         intent.ovn = dss_ref.get("ovn", intent.ovn)
         intent.save()
 
-        logger.info("OIR atualizada. DSS ID: %s | OVN: %s", intent.dss_id, intent.ovn)
+        logger.info("OIR atualizada (Update). DSS ID: %s | OVN: %s", intent.dss_id, intent.ovn)
         return intent, result
 
     @staticmethod

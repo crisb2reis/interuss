@@ -33,6 +33,8 @@ from apps.dss_client.exceptions import (
 
 from .models import OperationalIntent
 from .serializers import OIRCreateSerializer, OperationalIntentSerializer, QueryDSSSerializer
+from .services import OIRConstraintService
+from .conflict_resolution import OIRConflictResolutionService
 
 logger = logging.getLogger(__name__)
 
@@ -331,3 +333,159 @@ class SearchDSSOIRView(APIView):
             return Response(result)
         except Exception as exc:
             return _dss_error_response(exc)
+
+
+class CreateOIRNearConstraintView(APIView):
+    """
+    POST /api/oir/create_near_constraint/
+
+    Executa o fluxo completo ASTM F3548-21 "OIR próxima a Constraint":
+
+      1. Autentica com o DSS (audience=core-service)
+      2. Consulta constraints na área de interesse (POST /constraint_references/query)
+      3. Para cada constraint, obtém token com audience=<domínio do CP>
+         e busca os detalhes (GET {cp_uss_base_url}/uss/v1/constraints/{id})
+      4. Consulta OIRs existentes na área (POST /operational_intent_references/query)
+      5. Cria a nova OIR no DSS (PUT /operational_intent_references/{id})
+      6. Salva a OIR localmente no banco de dados
+
+    Payload esperado:
+    {
+      "area_of_interest": {          // volume 4D para consulta de constraints/OIRs
+        "volume": {
+          "outline_polygon": {"vertices": [{"lat": ..., "lng": ...}, ...]},
+          "altitude_lower": {"value": 50, "units": "M", "reference": "W84"},
+          "altitude_upper": {"value": 120, "units": "M", "reference": "W84"}
+        },
+        "time_start": {"value": "2026-05-01T10:00:00Z", "format": "RFC3339"},
+        "time_end":   {"value": "2026-05-01T11:00:00Z", "format": "RFC3339"}
+      },
+      "oir": {
+        "extents": [{...}],          // lista de volumes 4D da OIR
+        "state": "Accepted",         // Accepted | Activated | Nonconforming | Contingent
+        "uss_base_url": "https://..." // URL base do USS (opcional, usa settings.USS_BASE_URL)
+      }
+    }
+    """
+
+    def post(self, request):
+        # Validação básica do payload
+        area = request.data.get("area_of_interest")
+        oir_data = request.data.get("oir")
+
+        if not area or not isinstance(area, dict):
+            return Response(
+                {"error": "payload_invalido", "detail": "'area_of_interest' é obrigatório."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not oir_data or not isinstance(oir_data, dict):
+            return Response(
+                {"error": "payload_invalido", "detail": "'oir' é obrigatório."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not oir_data.get("extents"):
+            return Response(
+                {"error": "payload_invalido", "detail": "'oir.extents' é obrigatório."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            service = OIRConstraintService()
+            result = service.create_oir_near_constraint(
+                area_of_interest=area,
+                oir_payload=oir_data,
+            )
+            return Response(result, status=status.HTTP_201_CREATED)
+
+        except DSSConflictError as exc:
+            return Response(
+                {
+                    "error": "conflito_detectado",
+                    "detail": str(exc),
+                    "conflicting_oirs": exc.conflicting_references,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except Exception as exc:
+            logger.exception("Erro no fluxo create_near_constraint")
+            return _dss_error_response(exc)
+
+
+class CreateOIRWithConflictResolutionView(APIView):
+    """
+    POST /api/oir/create_with_conflict_resolution/
+
+    Executa o fluxo ASTM F3548-21 "OIR com Conflito":
+      Compara prioridades com OIRs concorrentes antes de registrar no DSS.
+    """
+
+    def post(self, request):
+        area = request.data.get("area_of_interest")
+        oir_data = request.data.get("oir")
+        our_priority = oir_data.get("priority", 0) if oir_data else 0
+
+        if not area or not isinstance(area, dict):
+            return Response({"error": "payload_invalido", "detail": "'area_of_interest' é obrigatório."}, status=400)
+        if not oir_data or not isinstance(oir_data, dict):
+            return Response({"error": "payload_invalido", "detail": "'oir' é obrigatório."}, status=400)
+        if not oir_data.get("extents"):
+            return Response({"error": "payload_invalido", "detail": "'oir.extents' é obrigatório."}, status=400)
+
+        try:
+            service = OIRConflictResolutionService()
+            result = service.resolve_and_create(
+                area_of_interest=area,
+                oir_payload=oir_data,
+                our_priority=our_priority
+            )
+            
+            if result.get("status") == "rejected":
+                return Response(result, status=status.HTTP_409_CONFLICT)
+            return Response(result, status=status.HTTP_201_CREATED)
+
+        except DSSConflictError as exc:
+            return Response(
+                {
+                    "error": "conflito_detectado",
+                    "detail": str(exc),
+                    "conflicting_oirs": getattr(exc, "conflicting_references", []),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except Exception as exc:
+            logger.exception("Erro no fluxo create_with_conflict_resolution")
+            return _dss_error_response(exc)
+
+
+class PeerToPeerOIRDetailsView(APIView):
+    """
+    GET /uss/v1/operational_intents/{id}
+    Endpoint P2P para outros USSs consultarem detalhes da nossa OIR (incluindo prioridade).
+    """
+
+    def get(self, request, pk):
+        try:
+            oir = OperationalIntent.objects.get(pk=pk)
+        except OperationalIntent.DoesNotExist:
+            return Response({"error": "OIR não encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Retorna o detalhe exigido pela especificação ASTM
+        # Aqui, no "operational_intent", devolvemos a prioridade real
+        response_data = {
+            "operational_intent": {
+                "reference": {
+                    "id": str(oir.id),
+                    "manager": "uss-cristiano",  # Identificador deste USS no DSS
+                    "uss_base_url": oir.uss_base_url,
+                    "state": oir.state,
+                    "ovn": oir.dss_ovn,
+                },
+                "details": {
+                    "volumes": oir.extents,
+                    "priority": oir.priority,
+                },
+                "priority": oir.priority,  # Campo extra na raiz da operação para fácil leitura
+            }
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)

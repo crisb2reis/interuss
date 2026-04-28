@@ -81,15 +81,20 @@ class ASTMFlightPlanUpsertView(APIView):
         start_time = datetime.fromisoformat(area['time_start']['value'].replace('Z', '+00:00'))
         end_time = datetime.fromisoformat(area['time_end']['value'].replace('Z', '+00:00'))
 
-        # Mapeamento de estados
-        # usage_state: Planned -> PLANNING, InUse -> ACCEPTED
-        internal_state = State.PLANNING if info['usage_state'] == "Planned" else State.ACCEPTED
+        # Mapeamento de estados ASTM -> Interno
+        if info['usage_state'] == "InUse":
+            internal_state = State.ACTIVATED
+        elif info['usage_state'] == "Planned":
+            internal_state = State.ACCEPTED
+        else:
+            internal_state = State.PLANNING
 
         # 2. Upsert (Create or Update)
         flight_plan, created = FlightPlan.objects.update_or_create(
             id=flight_plan_id,
             defaults={
                 "state": internal_state,
+                "priority": body.get('priority', 0),
                 "start_time": start_time,
                 "end_time": end_time,
                 "volume": poly_z,
