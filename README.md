@@ -16,23 +16,6 @@ A aplicação foi configurada para rodar preferencialmente via Docker para garan
 ### 2. Configuração de Ambiente
 Crie um arquivo `.env` na raiz do projeto. O arquivo `.env` deve conter as credenciais de acesso ao DSS e configurações do banco de dados. 
 
-**Exemplo de `.env` (Configurado para acesso Local):**
-```env
-SECRET_KEY=django-insecure-dev-key
-DEBUG=True
-ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
-
-# Para rodar via 'python manage.py' localmente:
-DATABASE_URL=postgis://uss_user:uss_password@localhost:5435/uss_db
-REDIS_URL=redis://localhost:6380/0
-
-# Outras configs
-ICEA_AUTH_URL=https://api.sandbox.br-utm.org/token
-ICEA_API_KEY=brutm
-DSS_BASE_URL=https://api.sandbox.br-utm.org
-USS_BASE_URL=http://localhost:8001
-USS_IDENTIFIER=uss-interuss
-```
 
 > [!NOTE]
 > O arquivo `docker-compose.yml` deste projeto já possui sobrescritas automáticas para que, **dentro do container**, a aplicação consiga achar os serviços usando os nomes de host do Docker (`db` e `redis`). O `.env` acima é otimizado para quando você estiver rodando comandos diretamente no seu terminal (como `python manage.py migrate`).
