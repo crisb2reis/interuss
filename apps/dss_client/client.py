@@ -14,6 +14,7 @@ Uso básico:
     )
 """
 
+import json
 import logging
 import urllib.parse
 from typing import Any, Dict, List, Optional
@@ -326,6 +327,11 @@ class DSSClient:
             raise DSSValidationError("ovn é obrigatório para atualizar uma OIR.")
         
         payload = self._build_oir_payload(extents, uss_base_url, state, subscription_id, key, new_subscription)
+        
+        print(f"\n[DSS-CLIENT DEBUG] ENVIANDO UPDATE PARA OIR: {oir_id}")
+        print(json.dumps(payload, indent=2))
+        print("-" * 40 + "\n")
+
         path = f"/dss/v1/operational_intent_references/{oir_id}/{ovn}"
         return self._handle_oir_response(self._request("PUT", path, json=payload), oir_id)
 

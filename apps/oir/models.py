@@ -43,6 +43,13 @@ class OperationalIntent(models.Model):
     extents = models.JSONField(
         help_text="Lista de volumes 4D — [{'volume': {...}, 'time_start': {...}, 'time_end': {...}}]"
     )
+    # [ASTM] ID da subscrição associada no DSS
+    subscription_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="ID da subscrição DSS associada a esta OIR.",
+    )
     # Resposta completa do DSS (para debug/auditoria)
     dss_response = models.JSONField(
         null=True,
@@ -59,3 +66,17 @@ class OperationalIntent(models.Model):
 
     def __str__(self):
         return f"OIR {self.id} [{self.state}] — {self.uss_base_url}"
+
+    @property
+    def start_date(self):
+        """Retorna o time_start do primeiro volume no formato string."""
+        if self.extents and isinstance(self.extents, list) and len(self.extents) > 0:
+            return self.extents[0].get("time_start", {})
+        return None
+
+    @property
+    def end_date(self):
+        """Retorna o time_end do primeiro volume no formato string."""
+        if self.extents and isinstance(self.extents, list) and len(self.extents) > 0:
+            return self.extents[0].get("time_end", {})
+        return None

@@ -44,12 +44,14 @@ class OIRConflictResolutionService:
         # 1 e 2. Consultar Constraints
         logger.info("[OIR-Conflict] Etapa 1/2: Consultando constraints no DSS...")
         dss_client_constraints = self._build_dss_client(scope="utm.constraint_processing")
+        print(f"[*] [ASTM] POST /dss/v1/constraint_references/query")
         constraint_result = dss_client_constraints.query_constraint_references(area_of_interest)
         constraint_refs = constraint_result.get("constraint_references", [])
 
         # 3. Consultar OIRs
         logger.info("[OIR-Conflict] Etapa 3: Consultando OIRs existentes na área...")
         dss_client_oir = self._build_dss_client(scope="utm.strategic_coordination")
+        print(f"[*] [ASTM] POST /dss/v1/operational_intent_references/query")
         oir_query_result = dss_client_oir.query_operational_intent_references(area_of_interest)
         existing_oirs = oir_query_result.get("operational_intent_references", [])
 
@@ -76,6 +78,7 @@ class OIRConflictResolutionService:
 
             try:
                 logger.info("[OIR-Conflict] Buscando detalhes da OIR %s no USS %s", oir_id, peer_uss_url)
+                print(f"[*] [ASTM] [P2P] GET {peer_uss_url}/uss/v1/operational_intents/{oir_id}")
                 details_response = dss_client_oir.get_oir_details_from_peer_uss(
                     oir_id=oir_id, peer_uss_base_url=peer_uss_url
                 )
@@ -123,6 +126,7 @@ class OIRConflictResolutionService:
         logger.info("[OIR-Conflict] Etapa Final: Criando OIR %s com deconflição...", new_oir_id)
 
         try:
+            print(f"[*] [ASTM] PUT /dss/v1/operational_intent_references/{new_oir_id}")
             dss_result = dss_client_oir.create_operational_intent_reference(
                 oir_id=new_oir_id,
                 extents=extents,
@@ -163,6 +167,9 @@ class OIRConflictResolutionService:
 
         ref = dss_result.get("operational_intent_reference", {})
 
+        subscribers = dss_result.get("subscribers", [])
+        sub_id = subscribers[0].get("subscription_id", "") if subscribers else ""
+
         # Salvar localmente
         oir = OperationalIntent.objects.create(
             id=new_oir_id,
@@ -172,6 +179,7 @@ class OIRConflictResolutionService:
             extents=extents,
             dss_id=ref.get("id", new_oir_id),
             dss_ovn=ref.get("ovn", ""),
+            subscription_id=sub_id,
             dss_response=dss_result,
         )
 

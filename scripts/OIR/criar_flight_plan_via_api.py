@@ -4,7 +4,7 @@ import uuid
 import json
 from datetime import datetime, timedelta
 
-BASE_URL = "http://api.dev.br-utm.org/uss-cristiano/api"
+BASE_URL = "http://api.sandbox.br-utm.org/uss-cristiano/api"
 
 def create_flight_plan():
     flight_plan_id = str(uuid.uuid4())
@@ -12,7 +12,7 @@ def create_flight_plan():
 
     # now = datetime.utcnow()
     # start = now + timedelta(minutes=15)
-    start = datetime(2026, 4, 28, 18, 46, 0)
+    start = datetime(2026, 4, 30, 13, 5, 0)
     end = start + timedelta(minutes=30)
 
     payload = {
@@ -25,10 +25,10 @@ def create_flight_plan():
                         "volume": {
                             "outline_polygon": {
                                 "vertices": [
-                                    {"lat": -23.3190, "lng": -45.9805},
-                                    {"lat": -23.3197, "lng": -45.9797},
-                                    {"lat": -23.3189, "lng": -45.9789},
-                                    {"lat": -23.3184, "lng": -45.9797}
+                                    {"lat": -23.251405929155823, "lng": -45.86100697775501},
+                                    {"lat": -23.252868169254455, "lng": -45.86100697775501},
+                                    {"lat": -23.252868169254455, "lng": -45.859250118309916},
+                                    {"lat": -23.251405929155823, "lng": -45.859250118309916}
                                 ]
                             },
                             "altitude_lower": {"value": 0, "units": "M", "reference": "W84"},
@@ -47,7 +47,8 @@ def create_flight_plan():
     }
 
     url = f"{BASE_URL}/flight_plans/{flight_plan_id}/"
-    print(f"[*] Enviando requisição POST (Upsert) para {url}...")
+    print(f"[*] Operação ASTM: PUT /dss/v1/operational_intent_references/{{entityid}}")
+    print(f"[*] Enviando requisição PUT (Upsert) para {url}...")
     
     response = requests.put(url, json=payload)
     

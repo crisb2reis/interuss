@@ -38,15 +38,20 @@ def main():
     # ── Parâmetros fornecidos pelo usuário ────────────────────────────────
     
     # Horários fixos conforme solicitado
-    time_start = "2026-05-30T19:57:17.094Z"
-    time_end = "2026-06-30T20:00:17.094Z"
+    from datetime import timedelta
+    from django.utils import timezone
+    now = timezone.now()
+    start_dt = now + timedelta(minutes=3)
+    end_dt = now + timedelta(hours=2)
+    time_start = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    time_end = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Vértices do polígono (ICEA)
+    # Vértices do polígono 
     vertices = [
-        {"lat": -23.209038292043147, "lng": -45.87052417963366},
-        {"lat": -23.209710788866886, "lng": -45.86979246585125},
-        {"lat": -23.208980318021133, "lng": -45.86893459452031},
-        {"lat": -23.20842376612441, "lng": -45.869754618586796},
+        {"lat": -23.251405929155823, "lng": -45.86100697775501},
+        {"lat": -23.252868169254455, "lng": -45.86100697775501},
+        {"lat": -23.252868169254455, "lng": -45.859250118309916},
+        {"lat": -23.251405929155823, "lng": -45.859250118309916}
     ]
 
     # Área de Interesse (AOI)
@@ -80,6 +85,7 @@ def main():
         "state": "Accepted",
     }
 
+    print(f"[*] Operação ASTM: PUT /dss/v1/operational_intent_references/{{entityid}}")
     print("[*] Iniciando fluxo via OIRConstraintService...")
     print(f"Cenário: ICEA (São José dos Campos)")
     print(f"Horário: {time_start} até {time_end}")
@@ -139,6 +145,54 @@ def main():
                 print(f"        - {cf.get('id')} (USS: {cf.get('uss_base_url')})")
         else:
             print("\n    [✓] Sem conflitos com outras OIRs na área.")
+
+        # ─── CRIAR FLIGHT PLAN LOCALMENTE PARA A UI E ATIVAÇÃO ───
+        from apps.flight_plans.models import FlightPlan, State, OperationalIntent
+        from django.contrib.gis.geos import Polygon
+        
+        poly = Polygon((
+            (vertices[0]["lng"], vertices[0]["lat"], 0.0),
+            (vertices[1]["lng"], vertices[1]["lat"], 0.0),
+            (vertices[2]["lng"], vertices[2]["lat"], 0.0),
+            (vertices[3]["lng"], vertices[3]["lat"], 0.0),
+            (vertices[0]["lng"], vertices[0]["lat"], 0.0),
+        ))
+
+        astm_payload = {
+            "flight_plan": {
+                "basic_information": {
+                    "usage_state": "Planned",
+                    "uas_state": "Nominal",
+                    "area": [oir_payload["extents"][0]],
+                }
+            }
+        }
+        
+        fp = FlightPlan.objects.create(
+            id=oir['dss_id'],
+            state=State.ACCEPTED,
+            priority=1,
+            start_time=start_dt,
+            end_time=end_dt,
+            volume=poly,
+            uss_base_url=settings.USS_BASE_URL,
+            astm_payload=astm_payload
+        )
+        
+        sub_id = ""
+        if oir.get('subscribers'):
+            sub_id = oir['subscribers'][0].get('subscription_id', '')
+            
+        OperationalIntent.objects.create(
+            flight_plan=fp,
+            dss_id=oir['dss_id'],
+            version=1,
+            state=State.ACCEPTED,
+            ovn=oir['dss_ovn'],
+            subscription_id=sub_id
+        )
+        
+        print(f"\n    [+] FlightPlan local associado (UI) salvo com ID: {oir['dss_id']}")
 
         print("\n" + "=" * 65)
         print("  FLUXO CONCLUÍDO!")

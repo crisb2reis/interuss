@@ -76,6 +76,7 @@ class OIRConstraintService:
         dss_client_constraints = self._build_dss_client(scope="utm.constraint_processing")
         
         # O DSS retorna apenas referências (IDs e URLs), não os detalhes das constraints.
+        print(f"[*] [ASTM] POST /dss/v1/constraint_references/query")
         constraint_result = dss_client_constraints.query_constraint_references(area_of_interest)
         constraint_refs = constraint_result.get("constraint_references", [])
 
@@ -114,6 +115,7 @@ class OIRConstraintService:
                 #   1. Extrai netloc do cp_uss_base_url → usa como audience
                 #   2. Chama self.authenticator.get_token(audience=netloc, scope=utm.constraint_processing)
                 #   3. Faz GET {cp_uss_base_url}/uss/v1/constraints/{id} com o token
+                print(f"[*] [ASTM] [P2P] GET {cp_uss_base_url}/uss/v1/constraints/{constraint_id}")
                 details = dss_client_constraints.get_constraint_details_from_provider(
                     constraint_id=constraint_id,
                     cp_uss_base_url=cp_uss_base_url,
@@ -157,6 +159,7 @@ class OIRConstraintService:
         logger.info("[OIR-Constraint] Etapa 5/6: Consultando OIRs existentes na área...")
         # Para operações de OIR, o escopo deve ser utm.strategic_coordination
         dss_client_oir = self._build_dss_client(scope="utm.strategic_coordination")
+        print(f"[*] [ASTM] POST /dss/v1/operational_intent_references/query")
         oir_query_result = dss_client_oir.query_operational_intent_references(area_of_interest)
         existing_oirs = oir_query_result.get("operational_intent_references", [])
 
@@ -182,6 +185,7 @@ class OIRConstraintService:
 
         try:
             # Tenta a criação inicial com as chaves (OVNs) que encontramos.
+            print(f"[*] [ASTM] PUT /dss/v1/operational_intent_references/{new_oir_id}")
             dss_result = dss_client_oir.create_operational_intent_reference(
                 oir_id=new_oir_id,
                 extents=extents,
@@ -277,6 +281,9 @@ class OIRConstraintService:
         
         ref = dss_result.get("operational_intent_reference", {})
 
+        subscribers = dss_result.get("subscribers", [])
+        sub_id = subscribers[0].get("subscription_id", "") if subscribers else ""
+
         # ── ETAPA 7: Salvar OIR localmente ──────────────────────────────────
         oir = OperationalIntent.objects.create(
             id=new_oir_id,
@@ -285,6 +292,7 @@ class OIRConstraintService:
             extents=extents,
             dss_id=ref.get("id", new_oir_id),
             dss_ovn=ref.get("ovn", ""),
+            subscription_id=sub_id,
             dss_response=dss_result,
         )
         logger.info(

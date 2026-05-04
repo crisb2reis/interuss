@@ -96,12 +96,14 @@ class OperationalIntentService:
         keys = []
         try:
             # OIRs vizinhas
+            print(f"[*] [ASTM] POST /dss/v1/operational_intent_references/query")
             neighbor_result = client_coord.query_operational_intent_references(area_query)
             for oir in neighbor_result.get("operational_intent_references", []):
                 if oir.get("id") != str(fp.id) and oir.get("ovn"):
                     keys.append(oir["ovn"])
             
             # Constraints vizinhas
+            print(f"[*] [ASTM] POST /dss/v1/constraint_references/query")
             constraint_result = client_constraint.query_constraint_references(area_query)
             for con in constraint_result.get("constraint_references", []):
                 if con.get("ovn"):
@@ -111,6 +113,7 @@ class OperationalIntentService:
 
         # 2. Submissão com Retry Automático
         try:
+            print(f"[*] [ASTM] PUT /dss/v1/operational_intent_references/{fp.id}")
             result = client_coord.create_operational_intent_reference(
                 oir_id=str(fp.id),
                 extents=extents_real,
@@ -188,12 +191,14 @@ class OperationalIntentService:
         keys = []
         try:
             # OIRs vizinhas
+            print(f"[*] [ASTM] POST /dss/v1/operational_intent_references/query")
             neighbors = client_coord.query_operational_intent_references(area_query)
             for oir in neighbors.get("operational_intent_references", []):
                 if oir.get("id") != str(intent.flight_plan.id) and oir.get("ovn"):
                     keys.append(oir["ovn"])
             
             # Constraints vizinhas
+            print(f"[*] [ASTM] POST /dss/v1/constraint_references/query")
             constraints = client_constraint.query_constraint_references(area_query)
             for con in constraints.get("constraint_references", []):
                 if con.get("ovn"):
@@ -206,6 +211,7 @@ class OperationalIntentService:
 
         # 2. Submissão com Retry Automático
         try:
+            print(f"[*] [ASTM] PUT /dss/v1/operational_intent_references/{intent.flight_plan.id}/{intent.ovn}")
             result = client_coord.update_operational_intent_reference(
                 oir_id=str(intent.flight_plan.id),
                 ovn=intent.ovn,
@@ -245,26 +251,41 @@ class OperationalIntentService:
         return intent, result
 
     @staticmethod
-    def delete_operational_intent(flight_plan_id: str) -> bool:
+    def delete_operational_intent(flight_plan_id: str) -> dict:
         """
-        Remove uma OIR do DSS.
-        DELETE /dss/v1/operational_intent_references/{entityid}/{ovn}
+        Remove uma OIR do DSS e o plano de voo local.
+        Retorna um dicionário para que a view possa compor a resposta ASTM F3548-21.
         """
-        try:
-            intent = OperationalIntent.objects.get(flight_plan_id=flight_plan_id)
-        except OperationalIntent.DoesNotExist:
-            logger.warning("OperationalIntent para FlightPlan %s não encontrada.", flight_plan_id)
-            return False
+        res = {
+            "found": False,
+            "dss_success": False,
+            "dss_notes": "Flight plan deleted successfully"
+        }
 
-        if intent.ovn:
+        try:
+            fp = FlightPlan.objects.get(id=flight_plan_id)
+            res["found"] = True
+            intent = getattr(fp, 'operational_intent', None)
+        except FlightPlan.DoesNotExist:
+            return res
+
+        if intent and intent.ovn and intent.dss_id:
             client = OperationalIntentService._build_client()
             try:
+                print(f"[*] [ASTM] DELETE /dss/v1/operational_intent_references/{intent.dss_id}/{intent.ovn}")
                 client.delete_operational_intent_reference(
-                    oir_id=str(intent.flight_plan.id),
+                    oir_id=intent.dss_id,
                     ovn=intent.ovn,
                 )
+                res["dss_success"] = True
             except DSSNotFoundError:
-                logger.warning("OIR %s não encontrada no DSS; removendo apenas localmente.", intent.dss_id)
-
-        intent.delete()
-        return True
+                res["dss_success"] = True # Já não existe no DSS
+                res["dss_notes"] = "Operational intent not found in DSS, removed locally"
+            except Exception as exc:
+                res["dss_success"] = False
+                res["dss_notes"] = f"DSS was unreachable or returned error: {str(exc)}"
+                logger.error("Erro ao deletar no DSS: %s", exc)
+        
+        # Remove localmente (CASCADE remove a OperationalIntent)
+        fp.delete()
+        return res

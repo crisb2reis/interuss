@@ -32,9 +32,11 @@ from apps.dss_client.exceptions import (
 )
 
 from .models import OperationalIntent
+from apps.flight_plans.models import OperationalIntent as FlightPlanOIR
 from .serializers import OIRCreateSerializer, OperationalIntentSerializer, QueryDSSSerializer
 from .services import OIRConstraintService
 from .conflict_resolution import OIRConflictResolutionService
+from apps.flight_plans.services import OperationalIntentService
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +161,10 @@ class OIRListCreateView(APIView):
             oir.dss_id = ref.get("id", str(oir.id))
             oir.dss_ovn = ref.get("ovn", "")
             oir.dss_response = result
+            
+            subscribers = result.get("subscribers", [])
+            oir.subscription_id = subscribers[0].get("subscription_id", "") if subscribers else ""
+            
             oir.save()
 
             response_data = {
@@ -464,28 +470,63 @@ class PeerToPeerOIRDetailsView(APIView):
     """
 
     def get(self, request, pk):
-        try:
-            oir = OperationalIntent.objects.get(pk=pk)
-        except OperationalIntent.DoesNotExist:
-            return Response({"error": "OIR não encontrada."}, status=status.HTTP_404_NOT_FOUND)
-
-        # Retorna o detalhe exigido pela especificação ASTM
-        # Aqui, no "operational_intent", devolvemos a prioridade real
-        response_data = {
-            "operational_intent": {
-                "reference": {
-                    "id": str(oir.id),
-                    "manager": "uss-cristiano",  # Identificador deste USS no DSS
-                    "uss_base_url": oir.uss_base_url,
-                    "state": oir.state,
-                    "ovn": oir.dss_ovn,
-                },
-                "details": {
-                    "volumes": oir.extents,
-                    "priority": oir.priority,
-                },
-                "priority": oir.priority,  # Campo extra na raiz da operação para fácil leitura
-            }
-        }
+        # 1. Tenta buscar no modelo de OIRs avulsas (app oir)
+        oir = OperationalIntent.objects.filter(pk=pk).first()
         
-        return Response(response_data, status=status.HTTP_200_OK)
+        if oir:
+            # Resposta para OIR do app 'oir'
+            response_data = {
+                "operational_intent": {
+                    "reference": {
+                        "id": str(oir.id),
+                        "manager": "uss-cristiano",
+                        "uss_availability": "Unknown",
+                        "version": 1,
+                        "state": oir.state,
+                        "ovn": oir.dss_ovn,
+                        "time_start": oir.start_date,
+                        "time_end": oir.end_date,
+                        "uss_base_url": oir.uss_base_url,
+                        "subscription_id": oir.subscription_id
+                    },
+                    "details": {
+                        "volumes": oir.extents,
+                        "off_nominal_volumes": [],
+                        "priority": oir.priority,
+                        "flight_type": "VLOS"
+                    },
+                }
+            }
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        # 2. Tenta buscar no modelo de Planos de Voo (app flight_plans)
+        fp_oir = FlightPlanOIR.objects.filter(flight_plan_id=pk).first()
+        if fp_oir:
+            # Constrói os extents ASTM a partir do modelo FlightPlan
+            extents = OperationalIntentService._build_extents(fp_oir)
+            
+            response_data = {
+                "operational_intent": {
+                    "reference": {
+                        "id": str(fp_oir.flight_plan.id),
+                        "manager": "uss-cristiano",
+                        "uss_availability": "Unknown",
+                        "version": 1,
+                        "state": fp_oir.state.capitalize(), # ASTM usa CamelCase (Accepted)
+                        "ovn": fp_oir.ovn,
+                        "time_start": fp_oir.start_date,
+                        "time_end": fp_oir.end_date,
+                        "uss_base_url": fp_oir.flight_plan.uss_base_url,
+                        "subscription_id": fp_oir.subscription_id
+                    },
+                    "details": {
+                        "volumes": extents,
+                        "off_nominal_volumes": [],
+                        "priority": fp_oir.flight_plan.priority,
+                        "flight_type": "VLOS"
+                    }
+                }
+            }
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        return Response({"error": "OIR não encontrada."}, status=status.HTTP_404_NOT_FOUND)

@@ -38,7 +38,6 @@ def main():
     print("=" * 65 + "\n")
 
     # Define o horário do voo: iniciando em 1 hora e durando 30 minutos.
-    # O DSS exige horários futuros para novas intenções operacionais.
     now = datetime.utcnow()
     start = now + timedelta(hours=1)
     end = start + timedelta(minutes=30)
@@ -84,6 +83,7 @@ def main():
         "state": "Accepted",
     }
 
+    print(f"[*] Operação ASTM: PUT /dss/v1/operational_intent_references/{{entityid}}")
     print("[*] Iniciando fluxo via OIRConstraintService...")
     print("Área: São José dos Campos")
 
@@ -153,6 +153,55 @@ def main():
                 print(f"        - {cf.get('id')} (USS: {cf.get('uss_base_url')})")
         else:
             print("\n    [✓] Sem conflitos com outras OIRs na área.")
+
+        # ─── CRIAR FLIGHT PLAN LOCALMENTE PARA A UI E ATIVAÇÃO ───
+        from apps.flight_plans.models import FlightPlan, State, OperationalIntent
+        from django.contrib.gis.geos import Polygon
+        
+        oir_verts = oir_payload["extents"][0]["volume"]["outline_polygon"]["vertices"]
+        poly = Polygon((
+            (oir_verts[0]["lng"], oir_verts[0]["lat"], 0.0),
+            (oir_verts[1]["lng"], oir_verts[1]["lat"], 0.0),
+            (oir_verts[2]["lng"], oir_verts[2]["lat"], 0.0),
+            (oir_verts[3]["lng"], oir_verts[3]["lat"], 0.0),
+            (oir_verts[0]["lng"], oir_verts[0]["lat"], 0.0),
+        ))
+
+        astm_payload = {
+            "flight_plan": {
+                "basic_information": {
+                    "usage_state": "Planned",
+                    "uas_state": "Nominal",
+                    "area": [oir_payload["extents"][0]],
+                }
+            }
+        }
+        
+        fp = FlightPlan.objects.create(
+            id=oir['dss_id'],
+            state=State.ACCEPTED,
+            priority=1,
+            start_time=start,
+            end_time=end,
+            volume=poly,
+            uss_base_url=getattr(settings, "USS_BASE_URL", "http://api.dev.br-utm.org"),
+            astm_payload=astm_payload
+        )
+
+        sub_id = ""
+        if oir.get('subscribers'):
+            sub_id = oir['subscribers'][0].get('subscription_id', '')
+            
+        OperationalIntent.objects.create(
+            flight_plan=fp,
+            dss_id=oir['dss_id'],
+            version=1,
+            state=State.ACCEPTED,
+            ovn=oir['dss_ovn'],
+            subscription_id=sub_id
+        )
+
+        print(f"\n    [+] FlightPlan local associado (UI) salvo com ID: {oir['dss_id']}")
 
         print("\n" + "=" * 65)
         print("  FLUXO CONCLUÍDO!")

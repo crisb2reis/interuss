@@ -34,6 +34,16 @@ class OperationalIntent(models.Model):
     # [NOVO] ID da subscrição associada no DSS
     subscription_id = models.CharField(max_length=255, blank=True, null=True)
 
+    @property
+    def start_date(self):
+        """Retorna o start_time do FlightPlan associado (compatível com OIR avulsa)."""
+        return self.flight_plan.start_time.isoformat() if self.flight_plan.start_time else None
+
+    @property
+    def end_date(self):
+        """Retorna o end_time do FlightPlan associado (compatível com OIR avulsa)."""
+        return self.flight_plan.end_time.isoformat() if self.flight_plan.end_time else None
+
 class OperationalIntentConflict(models.Model):
     """
     Registra hard-conflicts 409 vindos do DSS.

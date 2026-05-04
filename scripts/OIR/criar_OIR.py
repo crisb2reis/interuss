@@ -36,29 +36,31 @@ def main():
     # Uma pequena área em São Paulo com dimensão Z (altitude)
     # Formato: (lon, lat, alt)
     poly = Polygon((
-        (-47.6333, -23.5505, 500),
-        (-47.6233, -23.5505, 500),
-        (-47.6233, -23.5405, 500),
-        (-47.6333, -23.5405, 500),
-        (-47.6333, -23.5505, 500)
+        (-45.86100697775501, -23.251405929155823, 0.0),
+        (-45.86100697775501, -23.252868169254455, 0.0),
+        (-45.859250118309916, -23.252868169254455, 0.0),
+        (-45.859250118309916, -23.251405929155823, 0.0),
+        (-45.86100697775501, -23.251405929155823, 0.0)
     ))
     
-    now = timezone.now()
-    start = now + timedelta(hours=1)
+    # now = timezone.now()
+    # start = now + timedelta(hours=1)
+    start = datetime(2026, 4, 30, 13, 50, 0)
     end = start + timedelta(minutes=30)
 
     print("[*] Criando Plano de Voo local...")
     fp = FlightPlan.objects.create(
-        state=State.PLANNING,
+        state=State.ACCEPTED,
         priority=1,
         start_time=start,
         end_time=end,
         volume=poly,
-        uss_base_url="https://uss-cristiano.local.com"
+        uss_base_url="http://api.dev.br-utm.org/uss-cristiano"
     )
     print(f"[+] Plano de Voo criado: {fp.id}")
 
     # 2. Chamar o serviço de sincronização
+    print(f"[*] Operação ASTM: PUT /dss/v1/operational_intent_references/{{entityid}}")
     print("\n[*] Iniciando sincronização com o DSS...")
     try:
         intent, dss_response = OperationalIntentService.create_operational_intent(fp.id)

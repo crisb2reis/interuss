@@ -33,6 +33,7 @@ def update_and_activate(flight_plan_id):
     astm_payload['flight_plan']['basic_information']['usage_state'] = "InUse"
     astm_payload['flight_plan']['priority'] = 8
 
+    print(f"[*] Operação ASTM: PUT /dss/v1/operational_intent_references/{{entityid}}/{{ovn}}")
     print("[*] Enviando requisição de ativação (PUT)...")
     put_url = f"{BASE_URL}/flight_plans/{flight_plan_id}/"
     

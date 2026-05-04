@@ -89,6 +89,14 @@ class ASTMFlightPlanUpsertView(APIView):
         else:
             internal_state = State.PLANNING
 
+        # 1.5. Captura de estado anterior (para Rollback)
+        previous_state = None
+        previous_payload = None
+        existing_fp = FlightPlan.objects.filter(id=flight_plan_id).first()
+        if existing_fp:
+            previous_state = existing_fp.state
+            previous_payload = existing_fp.astm_payload
+
         # 2. Upsert (Create or Update)
         flight_plan, created = FlightPlan.objects.update_or_create(
             id=flight_plan_id,
@@ -124,6 +132,15 @@ class ASTMFlightPlanUpsertView(APIView):
                 planning_result = "Rejected"
                 notes = f"Conflito detectado: {str(exc)}"
                 status_code = status.HTTP_409_CONFLICT
+                
+                # Rollback do estado local em caso de rejeição
+                if existing_fp and previous_state:
+                    flight_plan.state = previous_state
+                    flight_plan.astm_payload = previous_payload
+                    flight_plan.save()
+                    if intent:
+                        intent.state = previous_state
+                        intent.save()
             else:
                 # DespiteConflict - avisamos mas marcamos como Completed
                 planning_result = "Completed"
@@ -134,6 +151,15 @@ class ASTMFlightPlanUpsertView(APIView):
             notes = str(exc)
             # ASTM costuma preferir 200 com Failed no body em alguns casos, 
             # mas vamos manter semântica HTTP onde apropriado.
+            
+            # Rollback do estado local em caso de falha de conexão/erro interno do DSS
+            if existing_fp and previous_state:
+                flight_plan.state = previous_state
+                flight_plan.astm_payload = previous_payload
+                flight_plan.save()
+                if intent:
+                    intent.state = previous_state
+                    intent.save()
 
         # 4. Resposta ASTM
         response_data = {
@@ -155,13 +181,27 @@ class ASTMFlightPlanUpsertView(APIView):
             return Response({"error": "nao_encontrado"}, status=404)
 
     def delete(self, request, flight_plan_id):
-        """DELETE /api/flight_plans/{id}/ — Remove do DSS e do USS."""
+        """
+        DELETE /api/flight_plans/{id}/ — Remove do DSS e do USS (ASTM F3548-21).
+        """
         try:
-            success = OperationalIntentService.delete_operational_intent(flight_plan_id)
-            if success:
-                return Response(status=status.HTTP_204_NO_CONTENT)
-            return Response({"error": "falha_ao_deletar"}, status=400)
+            res = OperationalIntentService.delete_operational_intent(flight_plan_id)
+            
+            if not res["found"]:
+                # ASTM: 404 if not found
+                return Response({"error": "Flight plan not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            # Resposta ASTM F3548-21
+            response_data = {
+                "planning_result": "Completed",
+                "notes": res["dss_notes"],
+                "flight_plan_status": "Planned",
+                "includes_advisories": "NoAdvisoriesOrConditions"
+            }
+            return Response(response_data, status=status.HTTP_200_OK)
+
         except Exception as exc:
+            logger.exception("Erro ao deletar FlightPlan %s", flight_plan_id)
             return _dss_error_response(exc)
 
 

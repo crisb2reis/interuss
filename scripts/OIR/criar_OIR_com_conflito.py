@@ -28,19 +28,17 @@ def main():
 
     # now = datetime.utcnow()
     # start = now + timedelta(hours=1)
-
-    # Ajuste do horário para 14:00:00Z (UTC) do dia 28 de Abril de 2026
-    start = datetime(2026, 4, 28, 18, 47, 0)
+    start = datetime(2026, 4, 29, 15, 27, 0)
     end = start + timedelta(minutes=30)
 
     area_of_interest = {
         "volume": {
             "outline_polygon": {
                 "vertices": [
-                    {"lat": -23.409038292043147, "lng": -45.98052417963366},
-                    {"lat": -23.409710788866886, "lng": -45.97979246585125},
-                    {"lat": -23.408980318021133, "lng": -45.96893459452031},
-                    {"lat": -23.40842376612441, "lng": -45.969754618586796},
+                    {"lat": -23.41354120403138, "lng": -45.98832853900334},
+                    {"lat": -23.41431187761508, "lng": -45.98509759371582},
+                    {"lat": -23.41346587324246, "lng": -45.98325433933687},
+                    {"lat": -23.41145287807252, "lng": -45.98408273902323}
                 ]
             },
             "altitude_lower": {"value": 0, "units": "M", "reference": "W84"},
@@ -55,8 +53,9 @@ def main():
         "state": "Accepted",
     }
 
-    our_priority = 9
+    our_priority = 0
 
+    print(f"[*] Operação ASTM: PUT /dss/v1/operational_intent_references/{{entityid}}")
     print("[*] Iniciando fluxo via OIRConflictResolutionService...")
     print(f"[*] Nossa Prioridade: {our_priority}")
 
