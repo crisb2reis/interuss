@@ -1,6 +1,28 @@
 version: '3.8'
 
 services:
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: uss-db
+    environment:
+      POSTGRES_DB: uss_db
+      POSTGRES_USER: uss_user
+      POSTGRES_PASSWORD: uss_password
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - uss_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: uss-redis
+    ports:
+      - "6380:6379"
+    networks:
+      - uss_network
+
   web:
     build: .
     image: uss-web:latest
@@ -11,16 +33,24 @@ services:
       - .:/app
     env_file:
       - .env
+    depends_on:
+      - db
+      - redis
     environment:
-      # Sobrescreve as URLs para apontar para os aliases internos do Docker
       - DATABASE_URL=postgis://uss_user:uss_password@db:5432/uss_db
       - REDIS_URL=redis://redis:6379/0
     networks:
-      - uss_default
+      - uss_network
     command: >
       sh -c "python3 manage.py migrate &&
              python3 manage.py runserver 0.0.0.0:8000"
 
+volumes:
+  postgres_data:
+
 networks:
-  uss_default:
+  uss_network:
     external: true
+    name: uss_default
+
+

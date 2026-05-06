@@ -19,4 +19,7 @@ urlpatterns = [
     # OIR CRUD
     path("oir/", views.OIRListCreateView.as_view(), name="oir-list-create"),
     path("oir/<uuid:pk>/", views.OIRDetailView.as_view(), name="oir-detail"),
+    path("isa/query_dss/", views.QueryISADSSView.as_view(), name="isa-query-dss"),
+    path("isa/<str:isa_id>/", views.IdentificationServiceAreaView.as_view(), name="isa-detail"),
+    path("uss/telemetry/", views.USSIngestTelemetryView.as_view(), name="uss-telemetry"),
 ]

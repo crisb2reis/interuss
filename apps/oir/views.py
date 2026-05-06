@@ -13,6 +13,7 @@ Endpoints disponíveis:
 """
 
 import logging
+import jwt as pyjwt
 
 from django.conf import settings
 from rest_framework import status
@@ -31,10 +32,10 @@ from apps.dss_client.exceptions import (
     DSSValidationError,
 )
 
-from .models import OperationalIntent
+from .models import OperationalIntent, IdentificationServiceArea
 from apps.flight_plans.models import OperationalIntent as FlightPlanOIR
 from .serializers import OIRCreateSerializer, OperationalIntentSerializer, QueryDSSSerializer
-from .services import OIRConstraintService
+from .services import OIRConstraintService, ISAService
 from .conflict_resolution import OIRConflictResolutionService
 from apps.flight_plans.services import OperationalIntentService
 
@@ -78,6 +79,78 @@ def _dss_error_response(exc: Exception) -> Response:
     if isinstance(exc, DSSServerError):
         return Response({"error": "erro_dss", "detail": str(exc)}, status=502)
     return Response({"error": "erro_interno", "detail": str(exc)}, status=500)
+
+
+def _require_scope(request, required_scope: str):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return Response(
+            {"message": "Bearer token ausente no header Authorization."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    token = auth_header.split(" ", 1)[1]
+    try:
+        # Mantém verify_exp=True; apenas ignora assinatura (validada pelo AUTH externo)
+        decoded = pyjwt.decode(
+            token,
+            options={"verify_signature": False, "verify_exp": True},
+        )
+        if required_scope not in decoded.get("scope", ""):
+            return Response(
+                {"message": f"Token não possui escopo '{required_scope}'."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+    except pyjwt.ExpiredSignatureError:
+        return Response(
+            {"message": "Token expirado."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    except pyjwt.DecodeError:
+        return Response(
+            {"message": "Token inválido ou não pôde ser decodificado."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    return None
+
+def _extract_subscription_id(ref: dict, result: dict) -> str:
+    """Extrai subscription_id do ref DSS ou da lista de subscribers."""
+    sub_id = ref.get("subscription_id")
+    if not sub_id:
+        subscribers = result.get("subscribers", [])
+        sub_id = subscribers[0].get("subscription_id", "") if subscribers else ""
+    return sub_id
+
+def _trigger_isa_if_activated(oir) -> None:
+    """Dispara criação/atualização de ISA se a OIR estiver Activated."""
+    if oir.state != "Activated":
+        return
+    try:
+        ISAService.create_or_update_from_oir(oir)
+        logger.info("ISA criado/atualizado para OIR %s.", oir.id)
+    except Exception as isa_exc:
+        logger.error("Falha ao criar ISA para OIR %s: %s", oir.id, isa_exc)
+
+def _build_p2p_reference(id_, state, ovn, time_start, time_end, uss_base_url, subscription_id) -> dict:
+    return {
+        "id": str(id_),
+        "manager": "uss-cristiano",
+        "uss_availability": "Unknown",
+        "version": 1,
+        "state": state,
+        "ovn": ovn,
+        "time_start": time_start,
+        "time_end": time_end,
+        "uss_base_url": uss_base_url,
+        "subscription_id": subscription_id,
+    }
+
+def _build_p2p_details(volumes, priority) -> dict:
+    return {
+        "volumes": volumes,
+        "off_nominal_volumes": [],
+        "priority": priority,
+        "flight_type": "VLOS",
+    }
 
 
 # ─── Views ───────────────────────────────────────────────────────
@@ -162,10 +235,10 @@ class OIRListCreateView(APIView):
             oir.dss_ovn = ref.get("ovn", "")
             oir.dss_response = result
             
-            subscribers = result.get("subscribers", [])
-            oir.subscription_id = subscribers[0].get("subscription_id", "") if subscribers else ""
-            
+            oir.subscription_id = _extract_subscription_id(ref, result)
             oir.save()
+            
+            _trigger_isa_if_activated(oir)
 
             response_data = {
                 "id": str(oir.id),
@@ -251,8 +324,13 @@ class OIRDetailView(APIView):
             oir.uss_base_url = uss_base_url
             oir.extents = data["extents"]
             oir.dss_ovn = ref.get("ovn", oir.dss_ovn)
+            if sub_id := _extract_subscription_id(ref, result):
+                oir.subscription_id = sub_id
+                
             oir.dss_response = result
             oir.save()
+
+            _trigger_isa_if_activated(oir)
 
             return Response({
                 "id": str(oir.id),
@@ -273,6 +351,7 @@ class OIRDetailView(APIView):
         if not oir.dss_ovn:
             return Response({"error": "OVN não disponível para esta OIR. Ela pode não ter sido registrada no DSS corretamente."}, status=400)
 
+        dss_delete_failed = False
         try:
             client = _build_client()
             client.delete_operational_intent_reference(
@@ -283,12 +362,15 @@ class OIRDetailView(APIView):
             logger.warning("OIR %s não encontrada no DSS; removendo localmente.", pk)
         except Exception as exc:
             logger.exception("Erro ao deletar OIR %s no DSS", pk)
-            # Remove localmente mesmo se o DSS falhar
-            pass
+            dss_delete_failed = True
 
         oir.delete()
         return Response(
-            {"message": f"OIR {pk} removida com sucesso.", "id": str(pk)},
+            {
+                "message": f"OIR {pk} removida com sucesso.",
+                "id": str(pk),
+                **({"warning": "Falha ao remover do DSS; removida apenas localmente."} if dss_delete_failed else {}),
+            },
             status=status.HTTP_200_OK,
         )
 
@@ -468,65 +550,272 @@ class PeerToPeerOIRDetailsView(APIView):
     GET /uss/v1/operational_intents/{id}
     Endpoint P2P para outros USSs consultarem detalhes da nossa OIR (incluindo prioridade).
     """
-
     def get(self, request, pk):
-        # 1. Tenta buscar no modelo de OIRs avulsas (app oir)
         oir = OperationalIntent.objects.filter(pk=pk).first()
-        
         if oir:
-            # Resposta para OIR do app 'oir'
-            response_data = {
+            return Response({
                 "operational_intent": {
-                    "reference": {
-                        "id": str(oir.id),
-                        "manager": "uss-cristiano",
-                        "uss_availability": "Unknown",
-                        "version": 1,
-                        "state": oir.state,
-                        "ovn": oir.dss_ovn,
-                        "time_start": oir.start_date,
-                        "time_end": oir.end_date,
-                        "uss_base_url": oir.uss_base_url,
-                        "subscription_id": oir.subscription_id
-                    },
-                    "details": {
-                        "volumes": oir.extents,
-                        "off_nominal_volumes": [],
-                        "priority": oir.priority,
-                        "flight_type": "VLOS"
-                    },
+                    "reference": _build_p2p_reference(
+                        oir.id, oir.state, oir.dss_ovn,
+                        oir.start_date, oir.end_date,
+                        oir.uss_base_url, oir.subscription_id,
+                    ),
+                    "details": _build_p2p_details(oir.extents, oir.priority),
                 }
-            }
-            return Response(response_data, status=status.HTTP_200_OK)
+            })
 
-        # 2. Tenta buscar no modelo de Planos de Voo (app flight_plans)
         fp_oir = FlightPlanOIR.objects.filter(flight_plan_id=pk).first()
         if fp_oir:
-            # Constrói os extents ASTM a partir do modelo FlightPlan
             extents = OperationalIntentService._build_extents(fp_oir)
-            
-            response_data = {
+            return Response({
                 "operational_intent": {
-                    "reference": {
-                        "id": str(fp_oir.flight_plan.id),
-                        "manager": "uss-cristiano",
-                        "uss_availability": "Unknown",
-                        "version": 1,
-                        "state": fp_oir.state.capitalize(), # ASTM usa CamelCase (Accepted)
-                        "ovn": fp_oir.ovn,
-                        "time_start": fp_oir.start_date,
-                        "time_end": fp_oir.end_date,
-                        "uss_base_url": fp_oir.flight_plan.uss_base_url,
-                        "subscription_id": fp_oir.subscription_id
-                    },
-                    "details": {
-                        "volumes": extents,
-                        "off_nominal_volumes": [],
-                        "priority": fp_oir.flight_plan.priority,
-                        "flight_type": "VLOS"
-                    }
+                    "reference": _build_p2p_reference(
+                        fp_oir.flight_plan.id,
+                        fp_oir.state.capitalize(),
+                        fp_oir.ovn,
+                        fp_oir.start_date, fp_oir.end_date,
+                        fp_oir.flight_plan.uss_base_url,
+                        fp_oir.subscription_id,
+                    ),
+                    "details": _build_p2p_details(extents, fp_oir.flight_plan.priority),
                 }
-            }
-            return Response(response_data, status=status.HTTP_200_OK)
+            })
 
         return Response({"error": "OIR não encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+
+class IdentificationServiceAreaView(APIView):
+    """
+    GET  /uss/identification_service_areas/{isa_id}
+         Escopo: rid.display_provider
+         SP consulta detalhes do próprio ISA.
+
+    POST /uss/identification_service_areas/{isa_id}
+         Escopo: rid.service_provider
+         DP recebe notificação de atualização vinda de SP externo.
+    """
+
+    def _get_isa(self, isa_id: str):
+        try:
+            return IdentificationServiceArea.objects.get(pk=isa_id)
+        except (IdentificationServiceArea.DoesNotExist, Exception):
+            return IdentificationServiceArea.objects.filter(dss_id=isa_id).first()
+
+    def get(self, request, isa_id: str):
+        err = _require_scope(request, "rid.display_provider")
+        if err:
+            return err
+
+        isa = self._get_isa(isa_id)
+        if not isa:
+            return Response(
+                {"message": f"ISA '{isa_id}' não encontrado."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        # Resposta conforme GetIdentificationServiceAreaDetailsResponse
+        return Response({"extents": isa.extents}, status=status.HTTP_200_OK)
+
+    def post(self, request, isa_id: str):
+        err = _require_scope(request, "rid.service_provider")
+        if err:
+            return err
+
+        extents = request.data.get("extents")
+        if not extents:
+            return Response(
+                {"message": "Campo 'extents' é obrigatório."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        isa = self._get_isa(isa_id)
+        if isa:
+            isa.extents = extents
+            isa.last_notification = request.data
+            isa.save()
+            logger.info("ISA %s atualizado via notificação POST.", isa_id)
+        else:
+            service_area = request.data.get("service_area", {})
+            IdentificationServiceArea.objects.create(
+                dss_id=isa_id,
+                uss_base_url=service_area.get("uss_base_url", ""),
+                extents=extents,
+                last_notification=request.data,
+            )
+            logger.info("ISA %s criado via notificação POST.", isa_id)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class QueryISADSSView(APIView):
+    """
+    GET /api/isa/query_dss/
+      ?area=lat1,lng1,lat2,lng2
+      &earliest_time=2026-05-05T10:00:00Z
+      &latest_time=2026-05-05T11:00:00Z
+
+    Requer escopo: rid.display_provider (validado via _require_scope)
+    """
+    def get(self, request):
+        err = _require_scope(request, "rid.display_provider")
+        if err:
+            return err
+
+        area = request.query_params.get("area")
+        earliest = request.query_params.get("earliest_time")
+        latest = request.query_params.get("latest_time")
+
+        if not area or not earliest or not latest:
+            return Response(
+                {"message": "Parâmetros 'area', 'earliest_time' e 'latest_time' são obrigatórios."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            from apps.oir.services import ISAService
+            result = ISAService.query_dss(area, earliest, latest)
+            return Response(result)
+        except Exception as exc:
+            return _dss_error_response(exc)
+
+class USSIngestTelemetryView(APIView):
+    """
+    POST /uss/telemetry
+    Recebe posições do drone e salva no banco de dados para servir no GET /uss/flights.
+    """
+    def post(self, request):
+        from apps.oir.serializers import RIDTelemetrySerializer
+        serializer = RIDTelemetrySerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"status": "success", "message": "Telemetry ingested."}, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+def _parse_view_param(view_str: str):
+    """Converte 'lat1,lng1,lat2,lng2' em bounding box. Raises ValueError se inválido."""
+    lat1, lng1, lat2, lng2 = [float(x) for x in view_str.split(",")]
+    return lat1, lng1, lat2, lng2
+
+def _bbox_to_dss_polygon(lat1, lng1, lat2, lng2) -> str:
+    """Expande 2 cantos para polígono de 4 vértices exigido pelo DSS."""
+    min_lat, max_lat = min(lat1, lat2), max(lat1, lat2)
+    min_lng, max_lng = min(lng1, lng2), max(lng1, lng2)
+    return (
+        f"{min_lat},{min_lng},"
+        f"{max_lat},{min_lng},"
+        f"{max_lat},{max_lng},"
+        f"{min_lat},{max_lng}"
+    )
+
+def _build_flight_entry(dss_isa, local_isa, local_intent, now, recent_dur) -> dict:
+    """Monta um RIDFlight a partir dos dados do ISA e telemetria local."""
+    from datetime import timedelta
+    from .models import RIDTelemetry
+
+    isa_id = dss_isa.get("id", "")
+    time_start = dss_isa.get("time_start")
+    time_end = dss_isa.get("time_end")
+    isa_extents = local_isa.extents if local_isa else {}
+
+    latest_telemetry = (
+        RIDTelemetry.objects.filter(isa=local_isa).first() if local_isa else None
+    )
+
+    entry = {"id": isa_id, "aircraft_type": "NotDeclared", "simulated": True}
+
+    if latest_telemetry:
+        entry["current_state"] = {
+            "timestamp": {"value": latest_telemetry.timestamp.isoformat().replace("+00:00", "Z"), "format": "RFC3339"},
+            "timestamp_accuracy": 0.0,
+            "position": {
+                "lat": latest_telemetry.lat, "lng": latest_telemetry.lng,
+                "alt": latest_telemetry.alt, "accuracy_h": latest_telemetry.accuracy_h,
+                "accuracy_v": latest_telemetry.accuracy_v,
+                "extrapolated": latest_telemetry.extrapolated,
+                "pressure_altitude": latest_telemetry.pressure_altitude,
+            },
+            "speed_accuracy": latest_telemetry.speed_accuracy,
+            "operational_status": latest_telemetry.operational_status,
+            "track": latest_telemetry.track,
+            "speed": latest_telemetry.speed,
+            "vertical_speed": latest_telemetry.vertical_speed,
+        }
+    else:
+        entry["operating_area"] = {
+            "volume": isa_extents.get("volume", {}),
+            "time_start": time_start,
+            "time_end": time_end,
+        }
+
+    if recent_dur > 0:
+        entry["recent_positions"] = []
+        if local_isa:
+            cutoff = now - timedelta(seconds=recent_dur)
+            recent_qs = RIDTelemetry.objects.filter(
+                isa=local_isa, timestamp__gte=cutoff
+            ).order_by("-timestamp")[:60]
+            entry["recent_positions"] = [
+                {
+                    "time": {"value": t.timestamp.isoformat().replace("+00:00", "Z"), "format": "RFC3339"},
+                    "position": {"lat": t.lat, "lng": t.lng, "alt": t.alt},
+                }
+                for t in recent_qs
+            ]
+
+    if local_intent:
+        entry["flight_plan_id"] = str(local_intent.id)
+
+    return entry
+
+class USSFlightsView(APIView):
+    def get(self, request):
+        from datetime import datetime, timezone, timedelta
+        from django.conf import settings
+        from apps.oir.services import ISAService
+        from apps.flight_plans.models import FlightPlan
+
+        err = _require_scope(request, "rid.display_provider")
+        if err:
+            return err
+
+        view = request.query_params.get("view")
+        if not view:
+            return Response({"message": "O parâmetro 'view' é obrigatório."}, status=400)
+
+        try:
+            lat1, lng1, lat2, lng2 = _parse_view_param(view)
+        except (ValueError, TypeError):
+            return Response({"message": "Formato inválido para 'view'. Use: lat1,lng1,lat2,lng2."}, status=400)
+
+        dss_area = _bbox_to_dss_polygon(lat1, lng1, lat2, lng2)
+        recent_dur = float(request.query_params.get("recent_positions_duration", 0) or 0)
+        now = datetime.now(timezone.utc)
+        now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        our_uss_base = settings.USS_BASE_URL.rstrip("/")
+
+        try:
+            dss_result = ISAService.query_dss(area=dss_area, earliest_time=now_iso, latest_time=now_iso)
+        except Exception as exc:
+            logger.error("Falha ao consultar ISAs no DSS: %s", exc)
+            return _dss_error_response(exc)
+
+        dss_isas = dss_result.get("service_areas", [])
+        total_isas_in_view = len(dss_isas)
+        flights = []
+
+        for dss_isa in dss_isas:
+            if dss_isa.get("uss_base_url", "").rstrip("/") != our_uss_base:
+                continue
+
+            isa_id = dss_isa.get("id", "")
+            local_isa = IdentificationServiceArea.objects.filter(dss_id=isa_id).first()
+            local_intent = (
+                OperationalIntent.objects.filter(dss_id=isa_id).first()
+                or FlightPlan.objects.filter(id=isa_id).first()
+            )
+            flights.append(_build_flight_entry(dss_isa, local_isa, local_intent, now, recent_dur))
+
+        return Response({
+            "timestamp": {"value": now_iso, "format": "RFC3339"},
+            "flights": flights,
+            "no_isas_present": total_isas_in_view == 0,
+        })

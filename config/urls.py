@@ -7,7 +7,7 @@ from django.urls import include, path, reverse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from apps.oir.views import PeerToPeerOIRDetailsView
+from apps.oir.views import PeerToPeerOIRDetailsView, IdentificationServiceAreaView, USSFlightsView, USSIngestTelemetryView
 
 
 @api_view(["GET"])
@@ -37,4 +37,13 @@ urlpatterns = [
     
     # Endpoint Peer-to-Peer ASTM F3548-21
     path("uss/v1/operational_intents/<uuid:pk>", PeerToPeerOIRDetailsView.as_view(), name="p2p-oir-details"),
+
+    # ISA — Identification Service Area (ASTM F3411 — Remote ID)
+    path(
+        "uss/identification_service_areas/<str:isa_id>",
+        IdentificationServiceAreaView.as_view(),
+        name="isa-detail-astm",
+    ),
+    path("uss/flights", USSFlightsView.as_view(), name="uss-flights"),
+    path("uss/telemetry/", USSIngestTelemetryView.as_view(), name="uss-telemetry"),
 ]

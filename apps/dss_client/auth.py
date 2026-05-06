@@ -156,7 +156,9 @@ class ICEAAuthenticator:
         }
 
         try:
-            response = requests.get(self.auth_url, params=params, timeout=30)
+            # Envia a chave tanto no params quanto no header para máxima compatibilidade com o Gateway
+            headers = {"x-api-key": self.api_key}
+            response = requests.get(self.auth_url, params=params, headers=headers, timeout=30)
             response.raise_for_status()
 
             data = response.json()
