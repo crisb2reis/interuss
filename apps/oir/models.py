@@ -80,3 +80,85 @@ class OperationalIntent(models.Model):
         if self.extents and isinstance(self.extents, list) and len(self.extents) > 0:
             return self.extents[0].get("time_end", {})
         return None
+
+
+class IdentificationServiceArea(models.Model):
+    """
+    Representa uma Identification Service Area (ISA) no ASTM F3411 Remote ID.
+    O ISA é associado a um volume 4D onde os voos serão identificados.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # FK opcional para vincular a uma OIR ativada no ASTM F3548
+    operational_intent = models.ForeignKey(
+        OperationalIntent,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="isas"
+    )
+
+    # ID no DSS (geralmente espelha o da OIR, mas tecnicamente são entidades distintas)
+    dss_id = models.CharField(max_length=255, unique=True)
+
+    # Versão retornada pelo DSS ao registrar (necessária para DELETE)
+    dss_version = models.CharField(max_length=255, blank=True, null=True)
+
+    uss_base_url = models.URLField()
+
+    # Volume 4D do ISA. Diferente da OIR (que é uma lista de volumes), o ISA é um único Volume4D
+    extents = models.JSONField(help_text="Volume 4D (ASTM F3411) do ISA")
+
+    # Última notificação POST recebida de SP externo (auditoria)
+    last_notification = models.JSONField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Identification Service Area"
+
+    def __str__(self):
+        return f"ISA {self.id} [OIR={self.operational_intent_id}]"
+
+class RIDTelemetry(models.Model):
+    """
+    Armazena posições de aeronaves para servir ao GET /uss/flights.
+    Cada registro representa uma leitura de posição do UAS.
+    Retidos por NetUasInAreaWindow (60s padrão ASTM).
+    """
+    isa = models.ForeignKey(
+        IdentificationServiceArea,
+        on_delete=models.CASCADE,
+        related_name="telemetry"
+    )
+    # Timestamp da posição (vindo do UAS ou gerado no recebimento)
+    timestamp = models.DateTimeField()
+    # Posição geográfica
+    lat = models.FloatField()
+    lng = models.FloatField()
+    alt = models.FloatField(default=-1000)
+    pressure_altitude = models.FloatField(default=-1000)
+    # Acurácias
+    accuracy_h = models.CharField(max_length=20, default="HAUnknown")
+    accuracy_v = models.CharField(max_length=20, default="VAUnknown")
+    # Movimento
+    track = models.FloatField(default=361)   # 361 = desconhecido
+    speed = models.FloatField(default=255)   # 255 = desconhecido
+    speed_accuracy = models.CharField(max_length=20, default="SAUnknown")
+    vertical_speed = models.FloatField(default=63)  # 63 = desconhecido
+    # Status operacional
+    operational_status = models.CharField(max_length=50, default="Undeclared")
+    extrapolated = models.BooleanField(default=False)
+    # Altura relativa (opcional)
+    height_distance = models.FloatField(default=0)
+    height_reference = models.CharField(max_length=20, default="GroundLevel")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-timestamp"]
+        verbose_name = "RID Telemetry"
+
+    def __str__(self):
+        return f"Telemetry ISA={self.isa_id} @ {self.timestamp}"

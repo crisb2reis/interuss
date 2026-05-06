@@ -42,16 +42,16 @@ def main():
     from django.utils import timezone
     now = timezone.now()
     start_dt = now + timedelta(minutes=3)
-    end_dt = now + timedelta(hours=2)
+    end_dt = now + timedelta(minutes=40)
     time_start = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     time_end = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # Vértices do polígono 
     vertices = [
-        {"lat": -23.251405929155823, "lng": -45.86100697775501},
-        {"lat": -23.252868169254455, "lng": -45.86100697775501},
-        {"lat": -23.252868169254455, "lng": -45.859250118309916},
-        {"lat": -23.251405929155823, "lng": -45.859250118309916}
+        {"lat": -23.213767186500263, "lng": -45.877224550908124},
+        {"lat": -23.218601668979545, "lng": -45.877224550908124},
+        {"lat": -23.218601668979545, "lng": -45.8677017825556},
+        {"lat": -23.213767186500263, "lng": -45.8677017825556}
     ]
 
     # Área de Interesse (AOI)

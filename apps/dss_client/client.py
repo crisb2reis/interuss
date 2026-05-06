@@ -508,3 +508,65 @@ class DSSClient:
             "Detalhes da OIR %s obtidos do Peer USS %s", oir_id, peer_base
         )
         return response.json() if response.text.strip() else {}
+
+    # ─── Identification Service Areas (ASTM F3411) ────────────────
+
+    def query_identification_service_areas(
+        self,
+        area: str,
+        earliest_time: str,
+        latest_time: str,
+    ) -> Dict[str, Any]:
+        """
+        Busca ISAs no DSS por área e janela de tempo.
+        GET /rid/v2/identification_service_areas
+          ?area=lat1,lng1,lat2,lng2
+          &earliest_time=<RFC3339>
+          &latest_time=<RFC3339>
+        Escopo: rid.display_provider
+        """
+        return self._request(
+            "GET",
+            "/rid/v2/dss/identification_service_areas",
+            params={
+                "area": area,
+                "earliest_time": earliest_time,
+                "latest_time": latest_time,
+            },
+        )
+
+    def create_identification_service_area(
+        self,
+        isa_id: str,
+        extents: Dict[str, Any],
+        uss_base_url: str,
+    ) -> Dict[str, Any]:
+        """
+        Registra um novo ISA no DSS.
+        PUT /rid/v2/identification_service_areas/{id}
+        Escopo: rid.service_provider
+        """
+        payload = {
+            "extents": extents,
+            "uss_base_url": uss_base_url,
+        }
+        return self._request(
+            "PUT",
+            f"/rid/v2/dss/identification_service_areas/{isa_id}",
+            json=payload,
+        )
+
+    def delete_identification_service_area(
+        self,
+        isa_id: str,
+        version: str,
+    ) -> Dict[str, Any]:
+        """
+        Remove um ISA do DSS.
+        DELETE /rid/v2/identification_service_areas/{id}/{version}
+        Escopo: rid.service_provider
+        """
+        return self._request(
+            "DELETE",
+            f"/rid/v2/dss/identification_service_areas/{isa_id}/{version}",
+        )

@@ -99,3 +99,27 @@ class QueryDSSSerializer(serializers.Serializer):
         except DjangoValidationError as e:
             raise ValidationError(detail=e.message if hasattr(e, 'message') else str(e))
         return data
+
+class RIDTelemetrySerializer(serializers.ModelSerializer):
+    """Serializer para ingestão de telemetria via POST /uss/telemetry."""
+    isa_id = serializers.UUIDField(write_only=True)
+
+    class Meta:
+        from .models import RIDTelemetry
+        model = RIDTelemetry
+        fields = [
+            "isa_id", "timestamp", "lat", "lng", "alt", "pressure_altitude",
+            "accuracy_h", "accuracy_v", "track", "speed", "speed_accuracy",
+            "vertical_speed", "operational_status", "extrapolated",
+            "height_distance", "height_reference"
+        ]
+
+    def create(self, validated_data):
+        isa_id = validated_data.pop("isa_id")
+        from .models import IdentificationServiceArea
+        try:
+            isa = IdentificationServiceArea.objects.get(id=isa_id)
+        except IdentificationServiceArea.DoesNotExist:
+            raise serializers.ValidationError({"isa_id": "ISA não encontrado."})
+        validated_data["isa"] = isa
+        return super().create(validated_data)

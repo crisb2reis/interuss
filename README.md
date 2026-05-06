@@ -21,19 +21,36 @@ Crie um arquivo `.env` na raiz do projeto. O arquivo `.env` deve conter as crede
 > O arquivo `docker-compose.yml` deste projeto já possui sobrescritas automáticas para que, **dentro do container**, a aplicação consiga achar os serviços usando os nomes de host do Docker (`db` e `redis`). O `.env` acima é otimizado para quando você estiver rodando comandos diretamente no seu terminal (como `python manage.py migrate`).
 
 ### 3. Subindo com Docker
-Para subir a aplicação e seus serviços de suporte:
+Para subir a aplicação completa (Web + Banco de Dados + Redis):
 
 ```bash
-# Sobe a aplicação em modo background e reconstrói se necessário
+# Sobe todos os serviços em modo background e reconstrói a imagem se necessário
 docker compose up -d --build
 ```
 
 O comando acima irá:
-1. Construir a imagem Docker (`Dockerfile`).
-2. Executar as migrações do banco de dados automaticamente.
-3. Iniciar o servidor de desenvolvimento na porta `8001`.
+1. Criar/Utilizar a rede `uss_default`.
+2. Iniciar o container **PostGIS** (PostgreSQL 15) na porta `5435`.
+3. Iniciar o container **Redis** na porta `6380`.
+4. Construir e iniciar o **Web App** na porta `8001`.
+5. Executar as migrações do banco de dados automaticamente assim que o banco estiver pronto.
+
+> [!TIP]
+> No primeiro boot, o PostGIS pode demorar alguns segundos para configurar as extensões espaciais. Se o Web App falhar ao conectar inicialmente, ele tentará novamente ou você pode reiniciar o serviço com `docker compose restart web`.
 
 Verifique se está rodando acessando: [http://localhost:8001/](http://localhost:8001/)
+
+---
+
+## 🏗️ Infraestrutura e Portas
+Os serviços estão mapeados para as seguintes portas no Host:
+
+| Serviço | Porta Interna | Porta Externa (Host) |
+| :--- | :--- | :--- |
+| **Web App** | 8000 | `8001` |
+| **PostgreSQL** | 5432 | `5435` |
+| **Redis** | 6379 | `6380` |
+
 
 ---
 
@@ -87,10 +104,17 @@ Para rodar localmente sem Docker, é necessário ter o **PostgreSQL com PostGIS*
 ---
 
 ## 📝 Logs e Debug
-Para visualizar os logs em tempo real:
+Para visualizar os logs em tempo real (todos os serviços):
+```bash
+docker compose logs -f
+```
+
+Ou apenas de um serviço específico:
 ```bash
 docker compose logs -f web
+docker compose logs -f db
 ```
+
 
 Para acessar o shell do container:
 ```bash
