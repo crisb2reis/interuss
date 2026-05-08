@@ -570,3 +570,19 @@ class DSSClient:
             "DELETE",
             f"/rid/v2/dss/identification_service_areas/{isa_id}/{version}",
         )
+
+    def get_identification_service_area(
+        self,
+        isa_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Obtém detalhes de um ISA específico no DSS.
+        GET /rid/v2/identification_service_areas/{id}
+        Escopo: rid.display_provider
+        """
+        if not isa_id:
+            raise DSSValidationError("isa_id é obrigatório.")
+        return self._request(
+            "GET",
+            f"/rid/v2/dss/identification_service_areas/{isa_id}",
+        )

@@ -11,10 +11,12 @@ Sequência implementada:
   6. USS → DSS:  PUT  /operational_intent_references/{id}   (criar nova OIR)
   7. Salva OIR localmente no modelo OperationalIntent
 """
+from apps.oir.models import IdentificationServiceArea
 import logging
 import urllib.parse
 import uuid
 import requests
+from typing import Any, Optional
 
 from django.conf import settings
 
@@ -34,6 +36,21 @@ def extract_subscription_id(ref: dict, result: dict) -> str:
         subscribers = result.get("subscribers", [])
         sub_id = subscribers[0].get("subscription_id", "") if subscribers else ""
     return sub_id
+
+
+def normalize_dss_time(time_field: Any) -> Optional[str]:
+    """
+    Normaliza o campo de tempo do DSS que pode vir como string RFC3339
+    ou como objeto {'value': '...', 'format': 'RFC3339'}.
+    Retorna a string do timestamp.
+    """
+    if not time_field:
+        return None
+    if isinstance(time_field, str):
+        return time_field
+    if isinstance(time_field, dict):
+        return time_field.get("value")
+    return str(time_field)
 
 
 def _build_dss_oir_payload(

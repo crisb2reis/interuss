@@ -265,6 +265,8 @@ class OperationalIntentService:
                 oir_instance = OirAppIntent.objects.filter(id=intent.flight_plan.id).first()
                 if oir_instance:
                     oir_instance.state = "Activated"
+                    oir_instance.dss_ovn = intent.ovn
+                    oir_instance.dss_response = result
                     oir_instance.save()
                     ISAService.create_or_update_from_oir(oir_instance)
                     logger.info("ISA criado/atualizado e estado sincronizado para OIR %s.", oir_instance.id)
