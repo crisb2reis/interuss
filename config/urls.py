@@ -7,7 +7,7 @@ from django.urls import include, path, reverse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from apps.oir.views import PeerToPeerOIRDetailsView, IdentificationServiceAreaView, USSFlightsView, USSIngestTelemetryView
+from apps.oir.views import PeerToPeerOIRDetailsView, IdentificationServiceAreaView, USSFlightsView, USSIngestTelemetryView, USSFlightDetailsView
 
 
 @api_view(["GET"])
@@ -45,5 +45,6 @@ urlpatterns = [
         name="isa-detail-astm",
     ),
     path("uss/flights", USSFlightsView.as_view(), name="uss-flights"),
+    path("uss/flights/<str:flight_id>/details", USSFlightDetailsView.as_view(), name="uss-flight-details"),
     path("uss/telemetry/", USSIngestTelemetryView.as_view(), name="uss-telemetry"),
 ]

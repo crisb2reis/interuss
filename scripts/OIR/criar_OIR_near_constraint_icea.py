@@ -41,8 +41,8 @@ def main():
     from datetime import timedelta
     from django.utils import timezone
     now = timezone.now()
-    start_dt = now + timedelta(minutes=3)
-    end_dt = now + timedelta(minutes=40)
+    start_dt = now + timedelta(minutes=1)
+    end_dt = now + timedelta(minutes=20)
     time_start = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     time_end = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
