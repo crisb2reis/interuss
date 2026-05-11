@@ -9,3 +9,5 @@ django-redis>=5.4
 urllib3
 pydantic>=2.0
 django-cors-headers
+celery[redis]>=5.3
+shapely>=2.0

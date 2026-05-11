@@ -130,5 +130,17 @@ REST_FRAMEWORK = {
     ],
 }
 
-# ─── CORS ────────────────────────────────────────────────────────
-CORS_ALLOW_ALL_ORIGINS = True
+# ─── CELERY ──────────────────────────────────────────────────────
+CELERY_BROKER_URL = env("REDIS_URL", default="redis://redis:6379/0")
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+CELERY_BEAT_SCHEDULE = {
+    "monitor-oir-conformance": {
+        "task": "apps.oir.tasks.monitor_oir_conformance",
+        "schedule": 15.0,  # a cada 15 segundos
+    },
+}
