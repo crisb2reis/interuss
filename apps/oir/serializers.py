@@ -117,9 +117,15 @@ class RIDTelemetrySerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         isa_id = validated_data.pop("isa_id")
         from .models import IdentificationServiceArea
-        try:
-            isa = IdentificationServiceArea.objects.get(id=isa_id)
-        except IdentificationServiceArea.DoesNotExist:
-            raise serializers.ValidationError({"isa_id": "ISA não encontrado."})
+        from django.db.models import Q
+        
+        # Tenta buscar pelo ID primário ou pelo DSS ID
+        isa = IdentificationServiceArea.objects.filter(
+            Q(id=isa_id) | Q(dss_id=str(isa_id))
+        ).first()
+        
+        if not isa:
+            raise serializers.ValidationError({"isa_id": f"ISA com ID {isa_id} não encontrado localmente."})
+            
         validated_data["isa"] = isa
         return super().create(validated_data)

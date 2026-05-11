@@ -717,64 +717,66 @@ def _bbox_to_dss_polygon(lat1, lng1, lat2, lng2) -> str:
     )
 
 def _build_flight_entry(dss_isa, local_isa, local_intent, now, recent_dur) -> dict:
-    """Monta um RIDFlight a partir dos dados do ISA e telemetria local."""
-    from datetime import timedelta
+    """Monta um RIDFlight conforme RIDFlightSchema (ASTM F3411)."""
     from .models import RIDTelemetry
 
     isa_id = dss_isa.get("id", "")
-    time_start = normalize_dss_time(dss_isa.get("time_start"))
-    time_end = normalize_dss_time(dss_isa.get("time_end"))
-    isa_extents = local_isa.extents if local_isa else {}
-
     latest_telemetry = (
         RIDTelemetry.objects.filter(isa=local_isa).order_by("-timestamp").first() if local_isa else None
     )
 
-    entry = {"id": isa_id, "aircraft_type": "Helicopter"}
+    # Monta sempre com a ordem exata do modelo
+    entry = {
+        "id": isa_id,
+        "aircraft_type": "Helicopter",
+        # current_state inserido abaixo apenas se houver telemetria
+        "simulated": True,
+        "recent_positions": [],
+    }
 
     if latest_telemetry:
-        latest_iso = latest_telemetry.timestamp.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        entry["current_state"] = {
-            "timestamp": {"value": latest_iso, "format": "RFC3339"},
-            "timestamp_accuracy": 0.1,
-            "position": {
-                "lat": latest_telemetry.lat,
-                "lng": latest_telemetry.lng,
-                "alt": latest_telemetry.alt,
-                "accuracy_h": latest_telemetry.accuracy_h,
-                "accuracy_v": latest_telemetry.accuracy_v,
-                "extrapolated": latest_telemetry.extrapolated,
-                "pressure_altitude": latest_telemetry.pressure_altitude,
+        latest_iso = latest_telemetry.timestamp.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        alt          = latest_telemetry.alt              if latest_telemetry.alt              != -1000 else 0
+        pressure_alt = latest_telemetry.pressure_altitude if latest_telemetry.pressure_altitude != -1000 else 0
+
+        current_state = {
+            "timestamp": {
+                "value":  latest_iso,
+                "format": "RFC3339",
             },
-            "speed_accuracy": latest_telemetry.speed_accuracy,
-            "operational_status": latest_telemetry.operational_status,
-            "track": round(latest_telemetry.track) if latest_telemetry.track is not None else 361,
-            "speed": latest_telemetry.speed if latest_telemetry.speed is not None else 255,
+            "timestamp_accuracy": 0,
+            "position": {
+                "lat":               latest_telemetry.lat,
+                "lng":               latest_telemetry.lng,
+                "alt":               alt,
+                "accuracy_h":        latest_telemetry.accuracy_h,
+                "accuracy_v":        latest_telemetry.accuracy_v,
+                "extrapolated":      latest_telemetry.extrapolated,
+                "pressure_altitude": pressure_alt,
+            },
+            "speed_accuracy":      latest_telemetry.speed_accuracy,
+            "operational_status":  latest_telemetry.operational_status,
+            "track":         latest_telemetry.track         if latest_telemetry.track         is not None else 361,
+            "speed":         latest_telemetry.speed         if latest_telemetry.speed         is not None else 255,
             "vertical_speed": latest_telemetry.vertical_speed if latest_telemetry.vertical_speed is not None else 63,
         }
-        entry["recent_positions"] = []
-        entry["simulated"] = True
-
-    else:
-        entry["operating_area"] = {
-            "volume": isa_extents.get("volume", {}),
-            "time_start": time_start,
-            "time_end": time_end,
+        # Insere current_state na posição correta (após aircraft_type)
+        entry = {
+            "id":             entry["id"],
+            "aircraft_type":  entry["aircraft_type"],
+            "current_state":  current_state,
+            "simulated":      entry["simulated"],
+            "recent_positions": entry["recent_positions"],
         }
 
     return entry
 
 class USSFlightsView(APIView):
     def get(self, request):
-        print(f"\n[DEBUG] USSFlightsView chamado: {request.get_full_path()}")
         from datetime import datetime, timezone, timedelta
         from django.conf import settings
         from apps.oir.services import ISAService
-        from apps.flight_plans.models import FlightPlan
-
-        # err = _require_scope(request, "rid.display_provider")
-        # if err:
-        #     return err
+        from .models import RIDTelemetry
 
         view = request.query_params.get("view")
         if not view:
@@ -788,44 +790,68 @@ class USSFlightsView(APIView):
         dss_area = _bbox_to_dss_polygon(lat1, lng1, lat2, lng2)
         recent_dur = float(request.query_params.get("recent_positions_duration", 0) or 0)
         now = datetime.now(timezone.utc)
-        now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        now_iso = now.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
         our_uss_base = settings.USS_BASE_URL.rstrip("/")
+        
+        def _normalize_url(url: str) -> str:
+            return url.strip().rstrip("/").replace("https://", "").replace("http://", "").lower()
 
         try:
             dss_result = ISAService.query_dss(area=dss_area, earliest_time=now_iso, latest_time=now_iso)
+            dss_isas = dss_result.get("service_areas", [])
         except Exception as exc:
             logger.error("Falha ao consultar ISAs no DSS: %s", exc)
-            return _dss_error_response(exc)
+            dss_isas = []
 
-        dss_isas = dss_result.get("service_areas", [])
-        total_isas_in_view = len(dss_isas)
         flights = []
+        processed_ids = set()
 
         for dss_isa in dss_isas:
-            # Normaliza URLs removendo protocolo e barras finais para comparação robusta
-            def _normalize_url(url: str) -> str:
-                return url.strip().rstrip("/").replace("https://", "").replace("http://", "").lower()
-
             if _normalize_url(dss_isa.get("uss_base_url", "")) != _normalize_url(our_uss_base):
-                print(f"[DEBUG] URL mismatch para ISA {dss_isa.get('id')}: DSS={dss_isa.get('uss_base_url')} != LOCAL={our_uss_base}")
-                # Se o ISA ID bate com algo no nosso banco, vamos processar mesmo assim para debug
                 if not IdentificationServiceArea.objects.filter(dss_id=dss_isa.get("id")).exists():
                     continue
 
-
             isa_id = dss_isa.get("id", "")
             local_isa = IdentificationServiceArea.objects.filter(dss_id=isa_id).first()
-            local_intent = (
-                OperationalIntent.objects.filter(dss_id=isa_id).first()
-                or FlightPlan.objects.filter(id=isa_id).first()
-            )
-            print(f"[DEBUG] Voo adicionado para ISA {isa_id}")
+            local_intent = OperationalIntent.objects.filter(dss_id=isa_id).first()
             flights.append(_build_flight_entry(dss_isa, local_isa, local_intent, now, recent_dur))
+            processed_ids.add(isa_id)
+
+        # ── Fallback: ISAs locais com telemetria recente (últimos 5 min) ──
+        # Cobre o caso em que o ISA expirou no DSS mas ainda há telemetria ativa.
+        min_lat, max_lat = min(lat1, lat2), max(lat1, lat2)
+        min_lng, max_lng = min(lng1, lng2), max(lng1, lng2)
+        recent_threshold = now - timedelta(minutes=5)
+
+        local_isas_with_telemetry = (
+            IdentificationServiceArea.objects
+            .filter(
+                telemetry__timestamp__gte=recent_threshold,
+                telemetry__lat__gte=min_lat,
+                telemetry__lat__lte=max_lat,
+                telemetry__lng__gte=min_lng,
+                telemetry__lng__lte=max_lng,
+            )
+            .distinct()
+        )
+
+        for isa in local_isas_with_telemetry:
+            if isa.dss_id in processed_ids:
+                continue
+            processed_ids.add(isa.dss_id)
+            synthetic_dss_isa = {"id": isa.dss_id, "uss_base_url": isa.uss_base_url}
+            local_intent = OperationalIntent.objects.filter(dss_id=isa.dss_id).first()
+            flights.append(_build_flight_entry(synthetic_dss_isa, isa, local_intent, now, recent_dur))
+
+        no_isas_present = len(dss_isas) == 0 and len(flights) == 0
 
         return Response({
-            "timestamp": {"value": now_iso, "format": "RFC3339"},
+            "timestamp": {
+                "value":  now_iso,
+                "format": "RFC3339",
+            },
             "flights": flights,
-            "no_isas_present": total_isas_in_view == 0,
+            "no_isas_present": no_isas_present,
         })
 
 class USSFlightDetailsView(APIView):
@@ -875,3 +901,34 @@ class USSFlightDetailsView(APIView):
         }
         
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+class OIRStateTransitionView(APIView):
+    """
+    PATCH /api/oir/{pk}/state/
+    Transiciona a OIR para o novo estado e atualiza o DSS.
+    """
+    def patch(self, request, pk):
+        from .models import OperationalIntent
+        from .services import OIRStateTransitionService
+
+        oir = OperationalIntent.objects.filter(pk=pk).first()
+        if not oir:
+            return Response({"error": "OIR não encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+        new_state = request.data.get("state")
+        if not new_state:
+            return Response({"error": "Campo 'state' é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            service = OIRStateTransitionService()
+            result = service.transition_to(oir, new_state)
+            return Response({
+                "status": "success",
+                "new_state": oir.state,
+                "dss_ovn": oir.dss_ovn,
+                "dss_response": result
+            })
+        except Exception as exc:
+            logger.exception("Erro ao transicionar estado da OIR %s", pk)
+            return _dss_error_response(exc)

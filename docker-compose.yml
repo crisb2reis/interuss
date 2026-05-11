@@ -45,6 +45,22 @@ services:
       sh -c "python3 manage.py migrate &&
              python3 manage.py runserver 0.0.0.0:8000"
 
+  celery-worker:
+    build: .
+    image: uss-web:latest
+    container_name: uss-celery-worker
+    command: celery -A config worker -l info -B
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - db
+    environment:
+      - DATABASE_URL=postgis://uss_user:uss_password@db:5432/uss_db
+      - REDIS_URL=redis://redis:6379/0
+    networks:
+      - uss_network
+
 volumes:
   postgres_data:
 

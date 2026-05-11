@@ -354,3 +354,100 @@ class ISAService:
             from .models import IdentificationServiceArea
             IdentificationServiceArea.objects.filter(pk=isa.pk).update(dss_version=version)
         return result
+
+
+class OIRStateTransitionService:
+    """
+    Gerencia as transições de estado de uma OIR (ASTM F3548-22).
+    """
+    VALID_TRANSITIONS = {
+        "Accepted": ["Activated"],
+        "Activated": ["Nonconforming", "Contingent"],
+        "Nonconforming": ["Activated", "Contingent"],
+        "Contingent": [],
+    }
+
+    def _build_client(self):
+        from apps.dss_client.client import DSSClient
+        return DSSClient(
+            intended_audience="core-service",
+            scope="utm.strategic_coordination",
+            auto_authenticate=True
+        )
+
+    def transition_to(self, oir: OperationalIntent, new_state: str) -> dict:
+        from django.utils import timezone
+        
+        logger.info(f"Transicionando OIR {oir.id} de {oir.state} para {new_state}")
+        
+        client = self._build_client()
+        
+        # 1. Coletar Key (OVNs da área)
+        area = {"volume": oir.extents[0]["volume"]}
+        if "time_start" in oir.extents[0]: area["time_start"] = oir.extents[0]["time_start"]
+        if "time_end" in oir.extents[0]: area["time_end"] = oir.extents[0]["time_end"]
+        
+        key = []
+        try:
+            oirs_res = client.query_operational_intent_references(area)
+            key.extend([r["ovn"] for r in oirs_res.get("operational_intent_references", []) if r.get("ovn")])
+            constraints_res = client.query_constraint_references(area)
+            key.extend([r["ovn"] for r in constraints_res.get("constraint_references", []) if r.get("ovn")])
+            key = list(set(key))
+            if oir.dss_ovn in key: key.remove(oir.dss_ovn)
+        except Exception as e:
+            logger.warning(f"Falha ao coletar OVNs para key: {e}")
+
+        # 2. Atualizar no DSS
+        try:
+            result = client.update_operational_intent_reference(
+                oir_id=str(oir.id),
+                ovn=oir.dss_ovn,
+                extents=oir.extents,
+                uss_base_url=oir.uss_base_url,
+                state=new_state,
+                key=key
+            )
+            
+            ref = result.get("operational_intent_reference", {})
+            oir.state = new_state
+            oir.dss_ovn = ref.get("ovn", oir.dss_ovn)
+            
+            if new_state == "Nonconforming":
+                oir.nonconforming_since = timezone.now()
+            else:
+                oir.nonconforming_since = None
+                
+            oir.dss_response = result
+            oir.save()
+            
+            return result
+        except Exception as e:
+            logger.error(f"Erro na transição DSS para OIR {oir.id}: {e}")
+            raise
+
+    def check_conformance(self, oir: OperationalIntent) -> bool:
+        """
+        Verifica se a última telemetria está dentro dos limites geográficos da OIR.
+        """
+        from .models import RIDTelemetry, IdentificationServiceArea
+        from shapely.geometry import Point, Polygon as ShapelyPolygon
+        
+        isa = IdentificationServiceArea.objects.filter(operational_intent=oir).first()
+        if not isa:
+            return True 
+            
+        latest_telemetry = RIDTelemetry.objects.filter(isa=isa).order_by("-timestamp").first()
+        if not latest_telemetry:
+            return True
+            
+        try:
+            vertices = oir.extents[0]["volume"]["outline_polygon"]["vertices"]
+            poly_coords = [(v["lng"], v["lat"]) for v in vertices]
+            polygon = ShapelyPolygon(poly_coords)
+            point = Point(latest_telemetry.lng, latest_telemetry.lat)
+            
+            return point.within(polygon)
+        except Exception as e:
+            logger.error(f"Erro ao processar geometria para conformidade da OIR {oir.id}: {e}")
+            return True

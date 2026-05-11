@@ -58,6 +58,11 @@ class OperationalIntent(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    nonconforming_since = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp do início do estado Nonconforming. Usado para contagem dos 60s."
+    )
 
     class Meta:
         ordering = ["-created_at"]
