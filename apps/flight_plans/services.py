@@ -46,13 +46,28 @@ class OperationalIntentService:
         end_time = intent.flight_plan.end_time + timedelta(minutes=buffer_minutes_end)
         
         coords = intent.flight_plan.volume.coords[0][:-1]
+        
+        # Extrai altitudes do payload ASTM original salvo, ou usa default se não existir
+        alt_lower = {"value": 0, "reference": "W84", "units": "M"}
+        alt_upper = {"value": 120, "reference": "W84", "units": "M"}
+        try:
+            if intent.flight_plan.astm_payload:
+                area = intent.flight_plan.astm_payload.get("flight_plan", {}).get("basic_information", {}).get("area", [{}])[0]
+                vol = area.get("volume", {})
+                if "altitude_lower" in vol:
+                    alt_lower = vol["altitude_lower"]
+                if "altitude_upper" in vol:
+                    alt_upper = vol["altitude_upper"]
+        except Exception:
+            pass
+
         return [{
             "volume": {
                 "outline_polygon": {
                     "vertices": [{"lat": v[1], "lng": v[0]} for v in coords]
                 },
-                "altitude_lower": {"value": 0, "reference": "W84", "units": "M"},
-                "altitude_upper": {"value": 120, "reference": "W84", "units": "M"},
+                "altitude_lower": alt_lower,
+                "altitude_upper": alt_upper,
             },
             "time_start": {
                 "value": start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + "Z",
