@@ -63,61 +63,61 @@ class ASTMFlightPlanUpsertView(APIView):
         info = body['basic_information']
         execution_style = data.get('execution_style', 'IfAllowed')
 
-        # 1. Mapeamento de dados ASTM -> Interno
-        # Extraímos o primeiro volume da lista 'area' para definir o volume principal
-        area = info['area'][0]
-        vertices = area['volume']['outline_polygon']['vertices']
-        alt_z = area['volume'].get('altitude_upper', {}).get('value', 120)
-        
-        # Constrói Polígono 3D (Z)
-        coords = [(v['lng'], v['lat'], alt_z) for v in vertices]
-        # Fecha o polígono se necessário
-        if coords[0] != coords[-1]:
-            coords.append(coords[0])
-        
-        poly_z = Polygon(coords, srid=4326)
-
-        # Datas
-        start_time = datetime.fromisoformat(area['time_start']['value'].replace('Z', '+00:00'))
-        end_time = datetime.fromisoformat(area['time_end']['value'].replace('Z', '+00:00'))
-
-        # Mapeamento de estados ASTM -> Interno
-        if info['usage_state'] == "InUse":
-            internal_state = State.ACTIVATED
-        elif info['usage_state'] == "Planned":
-            internal_state = State.ACCEPTED
-        else:
-            internal_state = State.PLANNING
-
-        # 1.5. Captura de estado anterior (para Rollback)
-        previous_state = None
-        previous_payload = None
-        existing_fp = FlightPlan.objects.filter(id=flight_plan_id).first()
-        if existing_fp:
-            previous_state = existing_fp.state
-            previous_payload = existing_fp.astm_payload
-
-        # 2. Upsert (Create or Update)
-        flight_plan, created = FlightPlan.objects.update_or_create(
-            id=flight_plan_id,
-            defaults={
-                "state": internal_state,
-                "priority": body.get('priority', 0),
-                "start_time": start_time,
-                "end_time": end_time,
-                "volume": poly_z,
-                "description": info.get('description', ''),
-                "uss_base_url": settings.USS_BASE_URL,
-                "astm_payload": request.data
-            }
-        )
-
-        # 3. Sincronização com DSS
-        planning_result = "Completed"
-        notes = ""
-        status_code = status.HTTP_200_OK if not created else status.HTTP_201_CREATED
-
         try:
+            # 1. Mapeamento de dados ASTM -> Interno
+            # Extraímos o primeiro volume da lista 'area' para definir o volume principal
+            area = info['area'][0]
+            vertices = area['volume']['outline_polygon']['vertices']
+            alt_z = area['volume'].get('altitude_upper', {}).get('value', 120)
+            
+            # Constrói Polígono 3D (Z)
+            coords = [(v['lng'], v['lat'], alt_z) for v in vertices]
+            # Fecha o polígono se necessário
+            if coords[0] != coords[-1]:
+                coords.append(coords[0])
+            
+            poly = Polygon(coords, srid=4326)
+
+            # Datas
+            start_time = datetime.fromisoformat(area['time_start']['value'].replace('Z', '+00:00'))
+            end_time = datetime.fromisoformat(area['time_end']['value'].replace('Z', '+00:00'))
+
+            # Mapeamento de estados ASTM -> Interno
+            if info['usage_state'] == "InUse":
+                internal_state = State.ACTIVATED
+            elif info['usage_state'] == "Planned":
+                internal_state = State.ACCEPTED
+            else:
+                internal_state = State.PLANNING
+
+            # 1.5. Captura de estado anterior (para Rollback)
+            previous_state = None
+            previous_payload = None
+            existing_fp = FlightPlan.objects.filter(id=flight_plan_id).first()
+            if existing_fp:
+                previous_state = existing_fp.state
+                previous_payload = existing_fp.astm_payload
+
+            # 2. Upsert (Create or Update)
+            flight_plan, created = FlightPlan.objects.update_or_create(
+                id=flight_plan_id,
+                defaults={
+                    "state": internal_state,
+                    "priority": body.get('priority', 0),
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "volume": poly,
+                    "description": info.get('description', ''),
+                    "uss_base_url": settings.USS_BASE_URL,
+                    "astm_payload": request.data
+                }
+            )
+
+            # 3. Sincronização com DSS
+            planning_result = "Completed"
+            notes = ""
+            status_code = status.HTTP_200_OK if not created else status.HTTP_201_CREATED
+
             # Se for "DespiteConflict", injetamos essa lógica no service futuramente.
             # Por enquanto, tentamos criar ou atualizar.
             intent = OperationalIntent.objects.filter(flight_plan=flight_plan).first()
@@ -146,9 +146,12 @@ class ASTMFlightPlanUpsertView(APIView):
                 planning_result = "Completed"
                 notes = f"Atenção: Voo planejado apesar de conflitos detectados. {str(exc)}"
         except Exception as exc:
-            logger.error(f"Erro no DSS durante PUT ASTM: {str(exc)}")
+            import traceback
+            error_trace = traceback.format_exc()
+            logger.error(f"Erro no DSS durante PUT ASTM: {str(exc)}\n{error_trace}")
             planning_result = "Failed"
-            notes = str(exc)
+            notes = f"Internal Server Error: {str(exc)}"
+            status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
             # ASTM costuma preferir 200 com Failed no body em alguns casos, 
             # mas vamos manter semântica HTTP onde apropriado.
             

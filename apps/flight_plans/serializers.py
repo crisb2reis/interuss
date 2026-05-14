@@ -41,14 +41,14 @@ class ASTMBasicInformationSerializer(serializers.Serializer):
 
 class ASTMFlightPlanBodySerializer(serializers.Serializer):
     basic_information = ASTMBasicInformationSerializer()
-    uas = serializers.CharField(required=False, allow_blank=True, default="")
+    uas = serializers.JSONField(required=False, allow_null=True, default=dict)
     priority = serializers.IntegerField(required=False, default=0)
-    operator = serializers.CharField(required=False, allow_blank=True, default="")
-    telemetry = serializers.CharField(required=False, allow_blank=True, default="")
-    astm_f3548_21 = serializers.CharField(required=False, allow_blank=True, default="")
-    uspace_flight_authorisation = serializers.CharField(required=False, allow_blank=True, default="")
-    rpas_operating_rules_2_6 = serializers.CharField(required=False, allow_blank=True, default="")
-    additional_information = serializers.DictField(required=False, default=dict)
+    operator = serializers.JSONField(required=False, allow_null=True, default=dict)
+    telemetry = serializers.JSONField(required=False, allow_null=True, default=dict)
+    astm_f3548_21 = serializers.JSONField(required=False, allow_null=True, default=dict)
+    uspace_flight_authorisation = serializers.JSONField(required=False, allow_null=True, default=dict)
+    rpas_operating_rules_2_6 = serializers.JSONField(required=False, allow_null=True, default=dict)
+    additional_information = serializers.JSONField(required=False, allow_null=True, default=dict)
 
 class ASTMFlightPlanRequestSerializer(serializers.Serializer):
     flight_plan = ASTMFlightPlanBodySerializer()

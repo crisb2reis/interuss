@@ -130,6 +130,13 @@ def _trigger_isa_if_activated(oir) -> None:
     except Exception as isa_exc:
         logger.error("Falha ao criar ISA para OIR %s: %s", oir.id, isa_exc)
 
+def _format_time(dt):
+    if not dt:
+        return None
+    if isinstance(dt, str):
+        return {"value": dt.replace("+00:00", "Z"), "format": "RFC3339"}
+    return {"value": dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + "Z", "format": "RFC3339"}
+
 def _build_p2p_reference(id_, state, ovn, time_start, time_end, uss_base_url, subscription_id) -> dict:
     return {
         "id": str(id_),
@@ -138,8 +145,8 @@ def _build_p2p_reference(id_, state, ovn, time_start, time_end, uss_base_url, su
         "version": 1,
         "state": state,
         "ovn": ovn,
-        "time_start": time_start,
-        "time_end": time_end,
+        "time_start": _format_time(time_start),
+        "time_end": _format_time(time_end),
         "uss_base_url": uss_base_url,
         "subscription_id": subscription_id,
     }
